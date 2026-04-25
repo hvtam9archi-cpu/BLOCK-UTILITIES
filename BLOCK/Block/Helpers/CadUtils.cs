@@ -1,6 +1,5 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Data.Common;
 using System.Linq;
 using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
@@ -68,6 +67,37 @@ namespace AutoCADBlockTools.Helpers
 				return btr.Name;
 			}
 			return br.Name;
+		}
+
+		/// <summary>
+		/// Đưa tất cả đối tượng Hatch trong Block Definition xuống dưới cùng (Draw Order: Back).
+		/// </summary>
+		public static void SendHatchesToBack(Transaction tr, BlockTableRecord btr)
+		{
+			try
+			{
+				ObjectIdCollection hatchIds = new ObjectIdCollection();
+				foreach (ObjectId id in btr)
+				{
+					if (id.IsErased) continue;
+					// Kiểm tra nhanh loại đối tượng
+					if (id.ObjectClass.DxfName == "HATCH")
+					{
+						hatchIds.Add(id);
+					}
+				}
+
+				if (hatchIds.Count > 0)
+				{
+					// Lấy DrawOrderTable của Block
+					DrawOrderTable dot = (DrawOrderTable)tr.GetObject(btr.DrawOrderTableId, OpenMode.ForWrite);
+					dot.MoveToBottom(hatchIds);
+				}
+			}
+			catch (System.Exception)
+			{
+				// Bỏ qua lỗi nếu DrawOrderTable không truy cập được (hiếm gặp)
+			}
 		}
 	}
 }

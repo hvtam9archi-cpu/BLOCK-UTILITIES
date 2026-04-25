@@ -32,7 +32,7 @@
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'">
     <DebugSymbols>true</DebugSymbols>
-    <OutputPath>D:\HOANGTAM\OneDrive - laborarch\3. DLL\V4\</OutputPath>
+    <OutputPath>D:\HOANGTAM\OneDrive - laborarch\3. DLL\v5\</OutputPath>
     <DefineConstants>DEBUG;TRACE</DefineConstants>
     <DebugType>full</DebugType>
     <PlatformTarget>x64</PlatformTarget>
@@ -58,7 +58,7 @@
   <ItemGroup>
     <Reference Include="AcCoreMgd, Version=23.1.0.0, Culture=neutral, processorArchitecture=MSIL">
       <HintPath>..\packages\AutoCAD.NET.Core.23.1.0\lib\net47\AcCoreMgd.dll</HintPath>
-      <Private>False</Private>
+      <Private>True</Private>
     </Reference>
     <Reference Include="AcCui, Version=23.1.0.0, Culture=neutral, processorArchitecture=MSIL">
       <HintPath>..\packages\AutoCAD.NET.23.1.0\lib\net47\AcCui.dll</HintPath>
@@ -66,7 +66,7 @@
     </Reference>
     <Reference Include="AcDbMgd, Version=23.1.0.0, Culture=neutral, processorArchitecture=MSIL">
       <HintPath>..\packages\AutoCAD.NET.Model.23.1.0\lib\net47\AcDbMgd.dll</HintPath>
-      <Private>False</Private>
+      <Private>True</Private>
     </Reference>
     <Reference Include="acdbmgdbrep, Version=23.1.0.0, Culture=neutral, processorArchitecture=MSIL">
       <HintPath>..\packages\AutoCAD.NET.Model.23.1.0\lib\net47\acdbmgdbrep.dll</HintPath>
@@ -78,7 +78,7 @@
     </Reference>
     <Reference Include="AcMgd, Version=23.1.0.0, Culture=neutral, processorArchitecture=MSIL">
       <HintPath>..\packages\AutoCAD.NET.23.1.0\lib\net47\AcMgd.dll</HintPath>
-      <Private>False</Private>
+      <Private>True</Private>
     </Reference>
     <Reference Include="AcMr, Version=23.1.0.0, Culture=neutral, processorArchitecture=MSIL">
       <HintPath>..\packages\AutoCAD.NET.23.1.0\lib\net47\AcMr.dll</HintPath>

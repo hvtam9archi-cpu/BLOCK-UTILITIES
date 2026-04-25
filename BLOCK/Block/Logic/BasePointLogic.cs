@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
@@ -14,6 +14,12 @@ namespace AutoCADBlockTools.Logic
 		private static Justification _lastJus = Justification.BottomLeft;
 		private static bool _retainVisual = true;
 
+		// Hằng số DXF Name cho Base Point Parameter
+		private const string DXF_BASE_POINT_PARAM = "BLOCKBASEPOINTPARAMETER";
+
+		/// <summary>
+		/// Lệnh JBP: Thay đổi điểm chèn theo vị trí căn lề (TopLeft, Center, v.v.)
+		/// </summary>
 		public static void JustifyBlock(Document doc)
 		{
 			Editor ed = doc.Editor;
@@ -30,7 +36,7 @@ namespace AutoCADBlockTools.Logic
 				tr.Commit();
 			}
 
-			// 2. Form Cài đặt
+			// 2. UI
 			using (var form = new JbpForm(_lastJus, _retainVisual))
 			{
 				if (Application.ShowModalDialog(form) != WinForms.DialogResult.OK) return;
@@ -52,73 +58,52 @@ namespace AutoCADBlockTools.Logic
 					ObjectId btrId = bt[name];
 					BlockTableRecord btr = (BlockTableRecord)tr.GetObject(btrId, OpenMode.ForRead);
 
-					// --- SỬA LỖI: Lấy Bounding Box chính xác hơn ---
 					Extents3d? bounds = GetGeoExtents(tr, btr);
-
 					if (!bounds.HasValue) continue;
 
 					Point3d newOrigin = CalcJusPoint(bounds.Value, _lastJus);
-					Vector3d disp = Point3d.Origin - newOrigin; // Vector dời hình về 0,0
+					Vector3d disp = Point3d.Origin - newOrigin;
 
 					if (disp.Length > 1e-6)
 					{
 						btr.UpgradeOpen();
 
-						// A. Dời hình học trong Block Definition
+						// --- XỬ LÝ HÌNH HỌC & BASE POINT ---
 						foreach (ObjectId id in btr)
 						{
-							if (tr.GetObject(id, OpenMode.ForWrite) is Entity ent)
+							Entity ent = tr.GetObject(id, OpenMode.ForWrite) as Entity;
+							if (ent == null) continue;
+
+							// [FIXED] Sử dụng DxfName để nhận diện BasePointParameter
+							if (IsBasePointParameter(ent))
+							{
+								// Dùng dynamic để set Position tránh lỗi thiếu Class Wrapper
+								try { ((dynamic)ent).Position = Point3d.Origin; } catch { }
+							}
+							else
+							{
 								ent.TransformBy(Matrix3d.Displacement(disp));
+							}
 						}
 
-						// B. Cập nhật vị trí Reference để hình không bị nhảy (Visual Position)
-						if (_retainVisual)
-						{
-							// Nếu trong Block dời đi vector DISP (ví dụ -10), 
-							// thì Reference bên ngoài phải dời đi vector -DISP (ví dụ +10) để bù trừ.
-							RecursiveUpdateReferences(tr, btr, disp);
-						}
-
+						if (_retainVisual) UpdateAllReferences(tr, btr, disp);
 						if (btr.HasAttributeDefinitions) toSync.Add(btrId);
+
+						CadUtils.SendHatchesToBack(tr, btr);
 						count++;
 					}
 				}
 				tr.Commit();
 
-				// Sync Attribute để chữ nhảy về đúng chỗ mới
 				foreach (ObjectId id in toSync) SyncAtts(doc, id);
-
 				ed.Regen();
 				ed.WriteMessage($"\nJustified {count} block types.");
 			}
 		}
 
-		private static void RecursiveUpdateReferences(Transaction tr, BlockTableRecord btr, Vector3d dispInBlockSpace)
-		{
-			ObjectIdCollection refIds = btr.GetBlockReferenceIds(true, true);
-			foreach (ObjectId id in refIds)
-			{
-				DBObject obj = tr.GetObject(id, OpenMode.ForRead);
-				if (obj is BlockReference br)
-				{
-					if (!br.IsWriteEnabled) br.UpgradeOpen();
-					// Transform vector nội bộ ra hệ tọa độ World (bao gồm Scale/Rotate của Block)
-					Vector3d worldDisp = dispInBlockSpace.TransformBy(br.BlockTransform);
-
-					// Dời vị trí Reference ngược lại để bù trừ sự thay đổi bên trong
-					// Logic: Pos_Mới = Pos_Cũ - (Vector_Dời_Nội_Bộ_Đã_Scale)
-					br.Position = br.Position.Add(worldDisp.Negate());
-
-					br.RecordGraphicsModified(true);
-				}
-				else if (obj is BlockTableRecord anonBtr)
-				{
-					// Đệ quy xử lý Dynamic Block (Anonymous Definition)
-					RecursiveUpdateReferences(tr, anonBtr, dispInBlockSpace);
-				}
-			}
-		}
-
+		/// <summary>
+		/// Lệnh CB, CBP, CBPR
+		/// </summary>
 		public static void CenterBasePoint(Document doc, bool autoCenter, bool retainRef)
 		{
 			Editor ed = doc.Editor;
@@ -144,7 +129,8 @@ namespace AutoCADBlockTools.Logic
 				BlockTableRecord btr = (BlockTableRecord)tr.GetObject(br.DynamicBlockTableRecord, OpenMode.ForRead);
 
 				Vector3d disp = new Vector3d();
-				if (autoCenter)
+
+				if (autoCenter) // CB
 				{
 					Extents3d? bounds = GetGeoExtents(tr, btr);
 					if (!bounds.HasValue) return;
@@ -153,26 +139,81 @@ namespace AutoCADBlockTools.Logic
 											  (bounds.Value.MinPoint.Z + bounds.Value.MaxPoint.Z) / 2);
 					disp = Point3d.Origin.GetVectorTo(cen).Negate();
 				}
-				else
+				else // CBP, CBPR
 				{
-					PromptPointOptions ppo = new PromptPointOptions("\nNew Base Point: ") { UseBasePoint = true, BasePoint = br.Position };
+					PromptPointOptions ppo = new PromptPointOptions("\nPick new Base Point: ") { UseBasePoint = true, BasePoint = br.Position };
 					var ppr = ed.GetPoint(ppo);
 					if (ppr.Status != PromptStatus.OK) return;
-					disp = ppr.Value.TransformBy(br.BlockTransform.Inverse()).GetVectorTo(Point3d.Origin);
+
+					Point3d pickPtInBlock = ppr.Value.TransformBy(br.BlockTransform.Inverse());
+					disp = pickPtInBlock.GetVectorTo(Point3d.Origin);
 				}
+
+				bool needSync = false;
+				ObjectId syncId = btr.ObjectId;
 
 				if (disp.Length > 1e-6)
 				{
 					btr.UpgradeOpen();
-					foreach (ObjectId id in btr)
-						if (tr.GetObject(id, OpenMode.ForWrite) is Entity ent) ent.TransformBy(Matrix3d.Displacement(disp));
 
-					if (retainRef) RecursiveUpdateReferences(tr, btr, disp);
-					if (btr.HasAttributeDefinitions) SyncAtts(doc, btr.ObjectId);
+					foreach (ObjectId id in btr)
+					{
+						Entity ent = tr.GetObject(id, OpenMode.ForWrite) as Entity;
+						if (ent == null) continue;
+
+						// [FIXED] Sử dụng DxfName
+						if (IsBasePointParameter(ent))
+						{
+							try { ((dynamic)ent).Position = Point3d.Origin; } catch { }
+						}
+						else
+						{
+							ent.TransformBy(Matrix3d.Displacement(disp));
+						}
+					}
+
+					if (retainRef) UpdateAllReferences(tr, btr, disp);
+					needSync = btr.HasAttributeDefinitions;
+					CadUtils.SendHatchesToBack(tr, btr);
 				}
 				tr.Commit();
+				
+				if (needSync) SyncAtts(doc, syncId);
 				ed.Regen();
 			}
+		}
+
+		private static void UpdateAllReferences(Transaction tr, BlockTableRecord btr, Vector3d dispInBlockSpace)
+		{
+			ObjectIdCollection directIds = btr.GetBlockReferenceIds(true, true);
+			foreach (ObjectId id in directIds) UpdateSingleReference(tr, id, dispInBlockSpace);
+
+			if (btr.IsDynamicBlock)
+			{
+				ObjectIdCollection anonBtrIds = btr.GetAnonymousBlockIds();
+				foreach (ObjectId anonId in anonBtrIds)
+				{
+					BlockTableRecord anonBtr = (BlockTableRecord)tr.GetObject(anonId, OpenMode.ForRead);
+					ObjectIdCollection anonRefIds = anonBtr.GetBlockReferenceIds(true, true);
+					foreach (ObjectId id in anonRefIds) UpdateSingleReference(tr, id, dispInBlockSpace);
+				}
+			}
+		}
+
+		private static void UpdateSingleReference(Transaction tr, ObjectId refId, Vector3d dispInBlockSpace)
+		{
+			if (refId.IsErased) return;
+			try
+			{
+				BlockReference br = tr.GetObject(refId, OpenMode.ForWrite, true) as BlockReference;
+				if (br != null)
+				{
+					Vector3d worldDisp = dispInBlockSpace.TransformBy(br.BlockTransform);
+					br.Position = br.Position.Add(worldDisp.Negate());
+					br.RecordGraphicsModified(true);
+				}
+			}
+			catch { }
 		}
 
 		public static void AutoBlock(Document doc)
@@ -181,6 +222,7 @@ namespace AutoCADBlockTools.Logic
 			SelectionSet ss = CadUtils.GetSelection(ed, "\nSelect objects to block: ", "*");
 			if (ss == null || ss.Count == 0) return;
 
+			using (DocumentLock dl = doc.LockDocument())
 			using (Transaction tr = doc.Database.TransactionManager.StartTransaction())
 			{
 				BlockTableRecord curSpace = (BlockTableRecord)tr.GetObject(doc.Database.CurrentSpaceId, OpenMode.ForWrite);
@@ -212,6 +254,8 @@ namespace AutoCADBlockTools.Logic
 				foreach (ObjectId id in ids)
 					if (tr.GetObject(id, OpenMode.ForWrite) is Entity e) e.Erase();
 
+				CadUtils.SendHatchesToBack(tr, newBtr);
+
 				BlockReference newRef = new BlockReference(center, newBtr.ObjectId);
 				curSpace.AppendEntity(newRef);
 				tr.AddNewlyCreatedDBObject(newRef, true);
@@ -219,39 +263,34 @@ namespace AutoCADBlockTools.Logic
 			}
 		}
 
-		// --- HÀM QUAN TRỌNG: LỌC ĐỐI TƯỢNG ĐỂ TÍNH BOUNDING BOX ---
+		// --- Helper Function ---
+		private static bool IsBasePointParameter(Entity ent)
+		{
+			// Kiểm tra DXF Name thay vì kiểm tra Type Class
+			try
+			{
+				return ent.GetRXClass().DxfName.ToUpper() == DXF_BASE_POINT_PARAM;
+			}
+			catch { return false; }
+		}
+
 		private static Extents3d? GetGeoExtents(Transaction tr, BlockTableRecord btr)
 		{
 			Extents3d? res = null;
 			foreach (ObjectId id in btr)
 			{
 				Entity ent = tr.GetObject(id, OpenMode.ForRead) as Entity;
-				// 1. Chỉ lấy đối tượng hiển thị
 				if (ent == null || !ent.Visible) continue;
+				if (ent is Xline || ent is Ray || ent is Viewport || ent is Dimension) continue;
 
-				// 2. LOẠI BỎ CÁC ĐỐI TƯỢNG GÂY NHIỄU VỊ TRÍ
-				if (ent is AttributeDefinition) continue; // AttDef không phải hình học cố định
-				if (ent is Dimension) continue;           // Dim có điểm định nghĩa tại (0,0) gây sai lệch
-				if (ent is Viewport) continue;
-				if (ent is Xline || ent is Ray) continue; // Đối tượng vô tận
-
-				// 3. CHỈ CHẤP NHẬN CÁC ĐỐI TƯỢNG HÌNH HỌC CHUẨN
-				bool isGeometry = ent is Curve ||          // Line, Arc, Circle, Polyline...
-								  ent is Solid ||
-								  ent is Region ||
-								  ent is Hatch ||
-								  ent is DBText || ent is MText || // Chấp nhận Text để tính bao chữ
-								  ent is BlockReference ||
-								  ent is Polyline2d || ent is Polyline3d || ent is SubDMesh || ent is Face;
-
-				if (!isGeometry) continue;
+				// [FIXED] Loại bỏ BasePointParameter bằng DXF Name
+				if (IsBasePointParameter(ent)) continue;
 
 				try
 				{
 					if (ent.Bounds.HasValue)
 					{
 						Extents3d b = ent.Bounds.Value;
-						// Kiểm tra tính hợp lệ (Min < Max) để tránh lỗi null extents
 						if (b.MinPoint.DistanceTo(b.MaxPoint) > 1e-8)
 						{
 							if (res == null) res = b;
@@ -291,12 +330,17 @@ namespace AutoCADBlockTools.Logic
 		{
 			try
 			{
+				string name = string.Empty;
 				using (Transaction tr = doc.TransactionManager.StartTransaction())
 				{
 					BlockTableRecord b = (BlockTableRecord)tr.GetObject(btrId, OpenMode.ForRead);
-					// Dùng Command synchronous để đảm bảo ATTSYNC chạy xong mới regen
-					doc.Editor.Command("_.ATTSYNC", "_N", b.Name);
+					name = b.Name;
 					tr.Commit();
+				}
+				
+				if (!string.IsNullOrEmpty(name))
+				{
+					doc.Editor.Command("_.ATTSYNC", "_N", name);
 				}
 			}
 			catch { }

@@ -20,6 +20,7 @@ namespace AutoCADBlockTools.Logic
 			SelectionSet ss = CadUtils.GetSelection(ed, "\nSelect blocks to fix layer: ");
 			if (ss == null || ss.Count == 0) return;
 
+			using (DocumentLock dl = doc.LockDocument())
 			using (Transaction tr = doc.Database.TransactionManager.StartTransaction())
 			{
 				HashSet<ObjectId> defsToProcess = new HashSet<ObjectId>();
@@ -40,7 +41,7 @@ namespace AutoCADBlockTools.Logic
 				if (backup.Count > 0) _undoStack.Push(backup);
 				tr.Commit();
 				ed.Regen();
-				ed.WriteMessage($"\nProcessed {processed.Count} block definitions.");
+				ed.WriteMessage($"\nProcessed {processed.Count} block definitions (Hatches sent to back).");
 			}
 		}
 
@@ -67,6 +68,9 @@ namespace AutoCADBlockTools.Logic
 					ProcessDefinition(tr, subBr.DynamicBlockTableRecord, processed, backup);
 				}
 			}
+
+			// [NEW] Sắp xếp lại Hatch sau khi xử lý Layer xong
+			CadUtils.SendHatchesToBack(tr, btr);
 		}
 
 		public static void UndoLayer0(Document doc)
@@ -78,6 +82,7 @@ namespace AutoCADBlockTools.Logic
 			}
 
 			List<EntityBackupState> batch = _undoStack.Pop();
+			using (DocumentLock dl = doc.LockDocument())
 			using (Transaction tr = doc.Database.TransactionManager.StartTransaction())
 			{
 				int c = 0;

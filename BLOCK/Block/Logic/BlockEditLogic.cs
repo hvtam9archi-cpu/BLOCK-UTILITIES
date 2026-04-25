@@ -4,7 +4,7 @@ using System.Linq;
 using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.EditorInput;
-using Autodesk.AutoCAD.Geometry;
+using Autodesk.AutoCAD.Runtime;
 using WinForms = System.Windows.Forms;
 using AutoCADBlockTools.Helpers;
 
@@ -16,7 +16,6 @@ namespace AutoCADBlockTools.Logic
 		public static void ExplodeToSingleLayer(Document doc)
 		{
 			Editor ed = doc.Editor;
-			// Chọn Block (Bao gồm cả Block thường và Block lồng nhau)
 			SelectionSet ss = CadUtils.GetSelection(ed, "\nSelect Blocks to Flatten (Recursive Explode Content): ", "INSERT");
 			if (ss == null || ss.Count == 0) return;
 
@@ -32,11 +31,10 @@ namespace AutoCADBlockTools.Logic
 					{
 						try
 						{
-							// Tạo Definition mới đã làm phẳng và gán lại cho Reference
 							FlattenBlockReference(tr, bt, br);
 							count++;
 						}
-						catch (Exception ex)
+						catch (System.Exception ex)
 						{
 							ed.WriteMessage($"\nFailed to flatten block: {ex.Message}");
 						}
@@ -44,19 +42,17 @@ namespace AutoCADBlockTools.Logic
 				}
 				tr.Commit();
 				ed.Regen();
-				ed.WriteMessage($"\nSuccessfully flattened content of {count} blocks.");
+				ed.WriteMessage($"\nSuccessfully flattened content of {count} blocks (Hatches sent to back).");
 			}
 		}
 
 		private static void FlattenBlockReference(Transaction tr, BlockTable bt, BlockReference br)
 		{
-			// 1. Tạo một Definition mới (Unique)
 			string newName = "*U_FLAT_" + DateTime.Now.Ticks + "_" + Guid.NewGuid().ToString().Substring(0, 4);
 			BlockTableRecord newDef = new BlockTableRecord { Name = newName };
 			bt.Add(newDef);
 			tr.AddNewlyCreatedDBObject(newDef, true);
 
-			// 2. Copy nội dung từ Definition cũ sang Definition mới
 			BlockTableRecord oldDef = (BlockTableRecord)tr.GetObject(br.DynamicBlockTableRecord, OpenMode.ForRead);
 			newDef.Origin = oldDef.Origin;
 			newDef.Units = oldDef.Units;
@@ -66,39 +62,33 @@ namespace AutoCADBlockTools.Logic
 			foreach (ObjectId id in oldDef) idsToCopy.Add(id);
 
 			IdMapping map = new IdMapping();
-			// SỬA LỖI TẠI ĐÂY: Dùng bt.Database thay vì tr.Database
 			bt.Database.DeepCloneObjects(idsToCopy, newDef.ObjectId, map, false);
 
-			// 3. Đệ quy Explode TẤT CẢ BlockReference bên trong Definition mới
 			FlattenDefinitionContent(tr, newDef);
 
-			// 4. Chuyển BlockReference trên bản vẽ sang dùng Definition mới này
+			// [NEW] Đảm bảo Hatch nằm dưới cùng
+			CadUtils.SendHatchesToBack(tr, newDef);
+
 			br.BlockTableRecord = newDef.ObjectId;
 		}
 
 		private static void FlattenDefinitionContent(Transaction tr, BlockTableRecord btr)
 		{
 			bool foundNested = true;
-			int safetyLoop = 0; // Tránh treo nếu có lỗi vòng lặp vô tận
+			int safetyLoop = 0;
 
-			// Vòng lặp quét đi quét lại cho đến khi không còn BlockReference nào
 			while (foundNested && safetyLoop < 50)
 			{
 				foundNested = false;
 				List<ObjectId> nestedRefs = new List<ObjectId>();
 
-				// Quét tìm các BlockReference hiện có trong BTR
 				foreach (ObjectId id in btr)
 				{
 					if (id.IsErased) continue;
 					DBObject obj = tr.GetObject(id, OpenMode.ForRead);
-					if (obj is BlockReference)
+					if (obj is BlockReference || obj is MInsertBlock)
 					{
 						nestedRefs.Add(id);
-					}
-					else if (obj is MInsertBlock)
-					{
-						nestedRefs.Add(id); // Xử lý cả Array (MInsert)
 					}
 				}
 
@@ -108,74 +98,80 @@ namespace AutoCADBlockTools.Logic
 					foreach (ObjectId refId in nestedRefs)
 					{
 						Entity nestedEnt = (Entity)tr.GetObject(refId, OpenMode.ForWrite);
-
-						// Explode ra các mảnh vỡ
-						DBObjectCollection fragments = new DBObjectCollection();
-						try
+						using (DBObjectCollection fragments = new DBObjectCollection())
 						{
-							nestedEnt.Explode(fragments);
-						}
-						catch
-						{
-							// Nếu không explode được (VD: Block bị khóa), bỏ qua
-							continue;
-						}
-
-						// Thêm mảnh vỡ vào BTR hiện tại
-						foreach (DBObject obj in fragments)
-						{
-							Entity ent = obj as Entity;
-							if (ent != null)
+							try
 							{
-								btr.AppendEntity(ent);
-								tr.AddNewlyCreatedDBObject(ent, true);
+								nestedEnt.Explode(fragments);
+								nestedEnt.Erase();
+
+								foreach (DBObject obj in fragments)
+								{
+									Entity ent = obj as Entity;
+									if (ent != null)
+									{
+										btr.AppendEntity(ent);
+										tr.AddNewlyCreatedDBObject(ent, true);
+									}
+									else obj.Dispose();
+								}
 							}
-							else
+							catch
 							{
-								obj.Dispose();
+								foreach (DBObject obj in fragments) if (!obj.IsDisposed) obj.Dispose();
 							}
 						}
-
-						// Xóa BlockReference cha đã explode
-						nestedEnt.Erase();
 					}
 				}
 				safetyLoop++;
 			}
 		}
 
-		// --- CÁC LỆNH KHÁC (GIỮ NGUYÊN) ---
 		public static void RenameBlock(Document doc)
 		{
 			Editor ed = doc.Editor;
 			PromptEntityOptions peo = new PromptEntityOptions("\nSelect block to rename: ");
-			peo.SetRejectMessage("\nMust be a block.");
+			peo.SetRejectMessage("\nMust be a block reference.");
 			peo.AddAllowedClass(typeof(BlockReference), true);
 			PromptEntityResult per = ed.GetEntity(peo);
 			if (per.Status != PromptStatus.OK) return;
 
+			ObjectId targetBtrId = ObjectId.Null;
+			string oldName = string.Empty;
+
+			// Step 1: Read (Transaction ngắn)
 			using (Transaction tr = doc.Database.TransactionManager.StartTransaction())
 			{
 				BlockReference br = (BlockReference)tr.GetObject(per.ObjectId, OpenMode.ForRead);
-				string oldName = CadUtils.GetEffectiveName(br, tr);
-
-				using (RenameBlockForm form = new RenameBlockForm(oldName))
-				{
-					if (Application.ShowModalDialog(form) == WinForms.DialogResult.OK)
-					{
-						string newName = form.ResultName;
-						if (newName == oldName) return;
-
-						BlockTable bt = (BlockTable)tr.GetObject(doc.Database.BlockTableId, OpenMode.ForWrite);
-						if (bt.Has(newName)) { ed.WriteMessage($"\nName '{newName}' exists."); return; }
-
-						ObjectId btrId = br.DynamicBlockTableRecord;
-						BlockTableRecord btr = (BlockTableRecord)tr.GetObject(btrId, OpenMode.ForWrite);
-						btr.Name = newName;
-						ed.WriteMessage($"\nRenamed to '{newName}'.");
-					}
-				}
+				targetBtrId = br.DynamicBlockTableRecord;
+				oldName = CadUtils.GetEffectiveName(br, tr);
 				tr.Commit();
+			}
+
+			// Step 2: UI (Không Transaction)
+			string newName = string.Empty;
+			using (RenameBlockForm form = new RenameBlockForm(oldName))
+			{
+				if (Application.ShowModalDialog(form) != WinForms.DialogResult.OK) return;
+				newName = form.ResultName;
+				if (newName == oldName) return;
+			}
+
+			// Step 3: Write (Transaction mới)
+			using (DocumentLock dl = doc.LockDocument())
+			using (Transaction tr = doc.Database.TransactionManager.StartTransaction())
+			{
+				BlockTable bt = (BlockTable)tr.GetObject(doc.Database.BlockTableId, OpenMode.ForRead);
+				if (bt.Has(newName))
+				{
+					ed.WriteMessage($"\nError: Name '{newName}' exists.");
+					return;
+				}
+
+				BlockTableRecord btr = (BlockTableRecord)tr.GetObject(targetBtrId, OpenMode.ForWrite);
+				btr.Name = newName;
+				tr.Commit();
+				ed.WriteMessage($"\nRenamed to '{newName}'.");
 			}
 		}
 
@@ -185,6 +181,7 @@ namespace AutoCADBlockTools.Logic
 			SelectionSet ss = CadUtils.GetSelection(ed, "\nSelect blocks to Make Unique: ");
 			if (ss == null || ss.Count == 0) return;
 
+			using (DocumentLock dl = doc.LockDocument())
 			using (Transaction tr = doc.Database.TransactionManager.StartTransaction())
 			{
 				BlockTable bt = (BlockTable)tr.GetObject(doc.Database.BlockTableId, OpenMode.ForWrite);
@@ -224,6 +221,9 @@ namespace AutoCADBlockTools.Logic
 					IdMapping map = new IdMapping();
 					doc.Database.DeepCloneObjects(ids, newBtr.ObjectId, map, false);
 
+					// [NEW] Hatch to back cho block mới tạo
+					CadUtils.SendHatchesToBack(tr, newBtr);
+
 					foreach (var br in blocks) br.BlockTableRecord = newBtr.ObjectId;
 					ed.WriteMessage($"\nConverted {blocks.Count} blocks to '{newName}'.");
 				}
@@ -233,6 +233,7 @@ namespace AutoCADBlockTools.Logic
 
 		public static void DeleteBlocks(Document doc)
 		{
+			// (Giữ nguyên code Delete cũ vì không tạo hình học mới)
 			Editor ed = doc.Editor;
 			SelectionSet ss = CadUtils.GetSelection(ed, "");
 
@@ -270,6 +271,7 @@ namespace AutoCADBlockTools.Logic
 
 		private static void DeleteBlockDefinition(Document doc, string name)
 		{
+			using (DocumentLock dl = doc.LockDocument())
 			using (Transaction tr = doc.Database.TransactionManager.StartTransaction())
 			{
 				BlockTable bt = (BlockTable)tr.GetObject(doc.Database.BlockTableId, OpenMode.ForRead);
