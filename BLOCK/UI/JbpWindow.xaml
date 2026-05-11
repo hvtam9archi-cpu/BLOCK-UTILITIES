@@ -3,7 +3,8 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:AutoCADBlockTools"
         Title="Justify Base Point" Height="360" Width="300"
-        WindowStartupLocation="CenterScreen">
+        WindowStartupLocation="CenterScreen"
+        WindowStyle="None" AllowsTransparency="True" Background="Transparent" ResizeMode="NoResize">
 
     <Window.Resources>
         <ResourceDictionary>

@@ -19,7 +19,13 @@
     <SolidColorBrush x:Key="FgBrush" Color="{StaticResource FgColor}"/>
     <SolidColorBrush x:Key="LabelBrush" Color="{StaticResource LabelColor}"/>
     <SolidColorBrush x:Key="AccentBrush" Color="{StaticResource AccentColor}"/>
+    <SolidColorBrush x:Key="AccentDarkBrush" Color="{StaticResource AccentDarkColor}"/>
     <SolidColorBrush x:Key="DangerBrush" Color="{StaticResource DangerColor}"/>
+
+    <SolidColorBrush x:Key="DangerBtnBgBrush" Color="#3B1C1C"/>
+    <SolidColorBrush x:Key="DangerBtnHoverBrush" Color="#4B2222"/>
+    <SolidColorBrush x:Key="DangerBtnPressedBrush" Color="#5C2D2D"/>
+    <SolidColorBrush x:Key="DangerBtnBorderBrush" Color="#5C2D2D"/>
 
     <!-- Global Styles -->
     <Style TargetType="Window">
@@ -79,7 +85,7 @@
                     </Border>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
-                            <Setter Property="Background" Value="{StaticResource AccentDarkColor}"/>
+                            <Setter Property="Background" Value="{StaticResource AccentDarkBrush}"/>
                         </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
@@ -112,9 +118,9 @@
     </Style>
 
     <Style TargetType="Button" x:Key="DangerButton">
-        <Setter Property="Background" Value="#3B1C1C"/>
+        <Setter Property="Background" Value="{StaticResource DangerBtnBgBrush}"/>
         <Setter Property="Foreground" Value="White"/>
-        <Setter Property="BorderBrush" Value="#5C2D2D"/>
+        <Setter Property="BorderBrush" Value="{StaticResource DangerBtnBorderBrush}"/>
         <Setter Property="BorderThickness" Value="1"/>
         <Setter Property="Height" Value="34"/>
         <Setter Property="Width" Value="90"/>
@@ -127,10 +133,10 @@
                     </Border>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
-                            <Setter Property="Background" Value="#4B2222"/>
+                            <Setter Property="Background" Value="{StaticResource DangerBtnHoverBrush}"/>
                         </Trigger>
                         <Trigger Property="IsPressed" Value="True">
-                            <Setter Property="Background" Value="#5C2D2D"/>
+                            <Setter Property="Background" Value="{StaticResource DangerBtnPressedBrush}"/>
                         </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
