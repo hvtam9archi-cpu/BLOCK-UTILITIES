@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ApplicationPackage SchemaVersion="1.0" AppVersion="1.0.0" Name="Block Utilities Plugin" ProductCode="{179898E2-1EC3-42DA-B55F-39F8F3D141E7}">
+  <CompanyDetails Name="TPL" Url="https://yourwebsite.com" />
+  <Components>
+    <!-- Khai báo load cho các phiên bản CAD R24.0 (2021) đến R24.3 (2024) -->
+    <RuntimeRequirements OS="Win64" Platform="AutoCAD*" SeriesMin="R24.0" SeriesMax="R24.3" />
+    <ComponentEntry AppName="BlockUtilities" Version="1.0" ModuleName="./Contents/BlockUtilities.dll" AppDescription="AutoCAD Block Utilities Plugin" LoadOnCommandInvocation="True" LoadOnAutoCADStartup="True">
+      <Commands GroupName="BLOCK_GROUP">
+        <Command Local="RSET" Global="RSET" />
+        <Command Local="RSC" Global="RSC" />
+        <Command Local="RRT" Global="RRT" />
+        <Command Local="RAL" Global="RAL" />
+        <Command Local="RR" Global="RR" />
+        <Command Local="DELB" Global="DELB" />
+        <Command Local="DLB" Global="DLB" />
+        <Command Local="UDLB" Global="UDLB" />
+        <Command Local="MU" Global="MU" />
+        <Command Local="CB" Global="CB" />
+        <Command Local="CBP" Global="CBP" />
+        <Command Local="CBPR" Global="CBPR" />
+        <Command Local="AB" Global="AB" />
+        <Command Local="JBP" Global="JBP" />
+        <Command Local="RB" Global="RB" />
+      </Commands>
+    </ComponentEntry>
+  </Components>
+</ApplicationPackage>

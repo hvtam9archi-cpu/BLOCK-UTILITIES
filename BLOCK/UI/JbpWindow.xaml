@@ -1,0 +1,109 @@
+<Window x:Class="AutoCADBlockTools.UI.JbpWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:AutoCADBlockTools"
+        Title="Justify Base Point" Height="360" Width="300"
+        WindowStartupLocation="CenterScreen">
+
+    <Window.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="../Themes/ThemeDictionary.xaml"/>
+            </ResourceDictionary.MergedDictionaries>
+
+            <Style TargetType="RadioButton" x:Key="JusButtonStyle">
+                <Setter Property="Background" Value="{StaticResource SurfaceBrush}"/>
+                <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}"/>
+                <Setter Property="BorderThickness" Value="1"/>
+                <Setter Property="Width" Value="55"/>
+                <Setter Property="Height" Value="40"/>
+                <Setter Property="Cursor" Value="Hand"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="RadioButton">
+                            <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="4">
+                                <Grid>
+                                    <!-- Inner White Box -->
+                                    <Border Background="White" BorderBrush="Black" BorderThickness="1" Margin="6"/>
+                                    <!-- Dynamic Red Dot (To be handled in code-behind or we can simplify and just show text) -->
+                                    <TextBlock Text="{Binding Content, RelativeSource={RelativeSource TemplatedParent}}" 
+                                               HorizontalAlignment="Center" VerticalAlignment="Center" 
+                                               FontSize="9" Foreground="Black" FontWeight="Bold" TextWrapping="Wrap" TextAlignment="Center"/>
+                                </Grid>
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsChecked" Value="True">
+                                    <Setter Property="Background" Value="#C8E6FF"/>
+                                    <Setter Property="BorderBrush" Value="DodgerBlue"/>
+                                    <Setter Property="BorderThickness" Value="2"/>
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+        </ResourceDictionary>
+    </Window.Resources>
+
+    <Border Background="{StaticResource BgBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="10">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="40"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="50"/>
+            </Grid.RowDefinitions>
+
+            <!-- Title Bar -->
+            <Border Grid.Row="0" Background="{StaticResource TitleBarBrush}" CornerRadius="10,10,0,0" MouseLeftButtonDown="TitleBar_MouseLeftButtonDown">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <Border Grid.Column="0" Width="20" Height="20" CornerRadius="4" Background="{StaticResource AccentBrush}" Margin="10,0,10,0">
+                        <TextBlock Text="J" Foreground="White" FontWeight="Bold" FontSize="12" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Border>
+                    <TextBlock Grid.Column="1" Text="Justify Base Point" Foreground="{StaticResource FgBrush}" FontWeight="SemiBold" FontSize="13" VerticalAlignment="Center"/>
+                    <Button Grid.Column="2" Content="✕" Width="32" Height="26" Margin="0,0,6,0" Style="{StaticResource DangerButton}" Click="BtnCancel_Click" BorderThickness="0" Background="Transparent"/>
+                </Grid>
+            </Border>
+
+            <!-- Content Area -->
+            <Border Grid.Row="1" Background="{StaticResource SurfaceBrush}" CornerRadius="6" Margin="14,14,14,14" Padding="12">
+                <StackPanel>
+                    <TextBlock Text="Justification" Style="{StaticResource SectionHeaderStyle}"/>
+                    <Border BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="6" Padding="15" Margin="0,0,0,15">
+                        <UniformGrid Columns="3" Rows="3" HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <RadioButton x:Name="rbTL" Content="TL" Style="{StaticResource JusButtonStyle}" Margin="5" Tag="TopLeft"/>
+                            <RadioButton x:Name="rbTC" Content="TC" Style="{StaticResource JusButtonStyle}" Margin="5" Tag="TopCenter"/>
+                            <RadioButton x:Name="rbTR" Content="TR" Style="{StaticResource JusButtonStyle}" Margin="5" Tag="TopRight"/>
+                            <RadioButton x:Name="rbML" Content="ML" Style="{StaticResource JusButtonStyle}" Margin="5" Tag="MiddleLeft"/>
+                            <RadioButton x:Name="rbMC" Content="MC" Style="{StaticResource JusButtonStyle}" Margin="5" Tag="MiddleCenter"/>
+                            <RadioButton x:Name="rbMR" Content="MR" Style="{StaticResource JusButtonStyle}" Margin="5" Tag="MiddleRight"/>
+                            <RadioButton x:Name="rbBL" Content="BL" Style="{StaticResource JusButtonStyle}" Margin="5" Tag="BottomLeft"/>
+                            <RadioButton x:Name="rbBC" Content="BC" Style="{StaticResource JusButtonStyle}" Margin="5" Tag="BottomCenter"/>
+                            <RadioButton x:Name="rbBR" Content="BR" Style="{StaticResource JusButtonStyle}" Margin="5" Tag="BottomRight"/>
+                        </UniformGrid>
+                    </Border>
+
+                    <TextBlock Text="Modification Method" Style="{StaticResource SectionHeaderStyle}"/>
+                    <Border BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="6" Padding="10">
+                        <StackPanel>
+                            <RadioButton x:Name="rbVisual" Content="Retain visual position" Foreground="{StaticResource FgBrush}" Margin="0,4"/>
+                            <RadioButton x:Name="rbInsert" Content="Retain insertion point" Foreground="{StaticResource FgBrush}" Margin="0,4"/>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </Border>
+
+            <!-- Bottom Bar -->
+            <Border Grid.Row="2" Background="{StaticResource TitleBarBrush}" CornerRadius="0,0,10,10" Padding="14,0,14,0">
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                    <Button Content="Cancel" Style="{StaticResource DarkButton}" Click="BtnCancel_Click" Margin="0,0,8,0"/>
+                    <Button Content="OK" Style="{StaticResource AccentButton}" Click="BtnOk_Click"/>
+                </StackPanel>
+            </Border>
+        </Grid>
+    </Border>
+</Window>
