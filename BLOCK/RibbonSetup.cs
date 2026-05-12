@@ -71,7 +71,7 @@ namespace AutoCADBlockTools
                 AddGroupToPanel(rps, new[] {
                     CreateButton("DELB", "Delete Blocks", "DELB"),
                     CreateButton("DLB", "To Layer 0", "DLB"),
-                    CreateButton("UDLB", "Undo DLB", "UDLB"),
+                    CreateButton("UDLB", "Undo Layer", "UDLB"),
                     CreateButton("MU", "Make Unique", "MU")
                 });
 
@@ -79,11 +79,11 @@ namespace AutoCADBlockTools
 
                 // --- Nhóm 3: Base Point ---
                 AddGroupToPanel(rps, new[] {
-                    CreateButton("CB", "Center Base Pt", "CB"),
-                    CreateButton("CBP", "Change Base Pt", "CBP"),
-                    CreateButton("CBPR", "Base Pt (Retain)", "CBPR"),
+                    CreateButton("CB", "Center Base", "CB"),
+                    CreateButton("CBP", "Change Base", "CBP"),
+                    CreateButton("CBPR", "Change Base (R)", "CBPR"),
                     CreateButton("AB", "Auto Block", "AB"),
-                    CreateButton("JBP", "Justify Base Pt", "JBP")
+                    CreateButton("JBP", "Justify Base", "JBP")
                 });
 
                 rtb.Panels.Add(rp);
