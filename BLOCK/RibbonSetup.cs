@@ -14,15 +14,31 @@ namespace AutoCADBlockTools
 
         public void Initialize()
         {
-            Application.Idle += OnIdle;
+            Application.Idle += Application_Idle;
+            Application.SystemVariableChanged += Application_SystemVariableChanged;
         }
 
-        public void Terminate() { }
-
-        private void OnIdle(object sender, EventArgs e)
+        public void Terminate() 
         {
-            Application.Idle -= OnIdle;
-            CreateRibbon();
+            Application.Idle -= Application_Idle;
+            Application.SystemVariableChanged -= Application_SystemVariableChanged;
+        }
+
+        private void Application_Idle(object sender, EventArgs e)
+        {
+            if (ComponentManager.Ribbon != null)
+            {
+                Application.Idle -= Application_Idle;
+                CreateRibbon();
+            }
+        }
+
+        private void Application_SystemVariableChanged(object sender, Autodesk.AutoCAD.ApplicationServices.SystemVariableChangedEventArgs e)
+        {
+            if (e.Name.Equals("WSCURRENT", StringComparison.OrdinalIgnoreCase) && ComponentManager.Ribbon != null)
+            {
+                CreateRibbon();
+            }
         }
 
         private void CreateRibbon()
