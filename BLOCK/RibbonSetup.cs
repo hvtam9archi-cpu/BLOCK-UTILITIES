@@ -52,6 +52,7 @@ namespace AutoCADBlockTools
             {
                 rtb = new RibbonTab { Title = TabTitle, Id = TabId };
                 ribbon.Tabs.Add(rtb);
+                rtb.IsActive = true;
             }
 
             // 2. Tìm hoặc Tạo Panel duy nhất "Block Utilities"
@@ -104,8 +105,6 @@ namespace AutoCADBlockTools
 
                 rtb.Panels.Add(rp);
             }
-
-            rtb.IsActive = true;
         }
 
         private void AddGroupToPanel(RibbonPanelSource rps, RibbonButton[] buttons)
