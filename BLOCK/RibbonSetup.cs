@@ -14,15 +14,31 @@ namespace AutoCADBlockTools
 
         public void Initialize()
         {
-            Application.Idle += OnIdle;
+            Application.Idle += Application_Idle;
+            Application.SystemVariableChanged += Application_SystemVariableChanged;
         }
 
-        public void Terminate() { }
-
-        private void OnIdle(object sender, EventArgs e)
+        public void Terminate() 
         {
-            Application.Idle -= OnIdle;
-            CreateRibbon();
+            Application.Idle -= Application_Idle;
+            Application.SystemVariableChanged -= Application_SystemVariableChanged;
+        }
+
+        private void Application_Idle(object sender, EventArgs e)
+        {
+            if (ComponentManager.Ribbon != null)
+            {
+                Application.Idle -= Application_Idle;
+                CreateRibbon();
+            }
+        }
+
+        private void Application_SystemVariableChanged(object sender, Autodesk.AutoCAD.ApplicationServices.SystemVariableChangedEventArgs e)
+        {
+            if (e.Name.Equals("WSCURRENT", StringComparison.OrdinalIgnoreCase) && ComponentManager.Ribbon != null)
+            {
+                CreateRibbon();
+            }
         }
 
         private void CreateRibbon()
@@ -36,6 +52,7 @@ namespace AutoCADBlockTools
             {
                 rtb = new RibbonTab { Title = TabTitle, Id = TabId };
                 ribbon.Tabs.Add(rtb);
+                rtb.IsActive = true;
             }
 
             // 2. Tìm hoặc Tạo Panel duy nhất "Block Utilities"
@@ -71,7 +88,7 @@ namespace AutoCADBlockTools
                 AddGroupToPanel(rps, new[] {
                     CreateButton("DELB", "Delete Blocks", "DELB"),
                     CreateButton("DLB", "To Layer 0", "DLB"),
-                    CreateButton("UDLB", "Undo DLB", "UDLB"),
+                    CreateButton("UDLB", "Undo Layer", "UDLB"),
                     CreateButton("MU", "Make Unique", "MU")
                 });
 
@@ -79,17 +96,15 @@ namespace AutoCADBlockTools
 
                 // --- Nhóm 3: Base Point ---
                 AddGroupToPanel(rps, new[] {
-                    CreateButton("CB", "Center Base Pt", "CB"),
-                    CreateButton("CBP", "Change Base Pt", "CBP"),
-                    CreateButton("CBPR", "Base Pt (Retain)", "CBPR"),
+                    CreateButton("CB", "Center Base", "CB"),
+                    CreateButton("CBP", "Change Base", "CBP"),
+                    CreateButton("CBPR", "Change Base (R)", "CBPR"),
                     CreateButton("AB", "Auto Block", "AB"),
-                    CreateButton("JBP", "Justify Base Pt", "JBP")
+                    CreateButton("JBP", "Justify Base", "JBP")
                 });
 
                 rtb.Panels.Add(rp);
             }
-
-            rtb.IsActive = true;
         }
 
         private void AddGroupToPanel(RibbonPanelSource rps, RibbonButton[] buttons)
