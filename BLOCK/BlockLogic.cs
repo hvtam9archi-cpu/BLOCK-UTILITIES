@@ -25,6 +25,7 @@ namespace AutoCADBlockTools
         public static bool RetainVisualPosition = true;
 
         // Undo Stack for DLB
+        private const int MaxUndoLevels = 10;
         private static readonly Stack<List<EntityBackupState>> _undoStack = new Stack<List<EntityBackupState>>();
         private static Database _databaseForUndo;
 
@@ -70,6 +71,30 @@ namespace AutoCADBlockTools
                 return btr.Name;
             }
             return br.Name;
+        }
+
+        // Helper: Get all block reference IDs, including anonymous block references for dynamic blocks
+        private static List<ObjectId> GetBlockReferenceIdsAll(BlockTableRecord btr, Transaction tr)
+        {
+            List<ObjectId> ids = new List<ObjectId>();
+            foreach (ObjectId id in btr.GetBlockReferenceIds(true, true))
+            {
+                ids.Add(id);
+            }
+            if (btr.IsDynamicBlock)
+            {
+                foreach (ObjectId anonBtrId in btr.GetAnonymousBlockIds())
+                {
+                    if (tr.GetObject(anonBtrId, OpenMode.ForRead) is BlockTableRecord anonBtr)
+                    {
+                        foreach (ObjectId id in anonBtr.GetBlockReferenceIds(true, true))
+                        {
+                            ids.Add(id);
+                        }
+                    }
+                }
+            }
+            return ids;
         }
 
         // ==========================================================================================
@@ -197,6 +222,7 @@ namespace AutoCADBlockTools
             // Xóa theo Selection
             if (ss != null && ss.Count > 0)
             {
+                UndoHelper.Begin(doc);
                 HashSet<string> blocksToDelete = new HashSet<string>();
                 using (Transaction tr = db.TransactionManager.StartTransaction())
                 {
@@ -208,6 +234,7 @@ namespace AutoCADBlockTools
                     tr.Commit();
                 }
                 foreach (string name in blocksToDelete) DeleteBlockByName(db, ed, name);
+                UndoHelper.End(doc);
                 return;
             }
 
@@ -256,7 +283,7 @@ namespace AutoCADBlockTools
 
                 ObjectId btrId = bt[blockName];
                 BlockTableRecord btr = (BlockTableRecord)tr.GetObject(btrId, OpenMode.ForRead);
-                ObjectIdCollection refIds = btr.GetBlockReferenceIds(true, true);
+                List<ObjectId> refIds = GetBlockReferenceIdsAll(btr, tr);
 
                 int count = 0;
                 foreach (ObjectId refId in refIds)
@@ -267,7 +294,7 @@ namespace AutoCADBlockTools
 
                 try
                 {
-                    if (btr.GetBlockReferenceIds(true, true).Count == 0)
+                    if (GetBlockReferenceIdsAll(btr, tr).Count == 0)
                     {
                         btr.UpgradeOpen();
                         btr.Erase();
@@ -315,7 +342,18 @@ namespace AutoCADBlockTools
                     ProcessBlockDefinition(tr, btrId, processedBtrs, currentBatchBackup);
                 }
 
-                if (currentBatchBackup.Count > 0) _undoStack.Push(currentBatchBackup);
+                if (currentBatchBackup.Count > 0)
+                {
+                    _undoStack.Push(currentBatchBackup);
+                    while (_undoStack.Count > MaxUndoLevels)
+                    {
+                        // Loại bỏ entry cũ nhất để tránh tích lũy bộ nhớ vô hạn
+                        var temp = new Stack<List<EntityBackupState>>();
+                        while (_undoStack.Count > 1) temp.Push(_undoStack.Pop());
+                        _undoStack.Pop(); // Bỏ entry cũ nhất (đáy stack)
+                        while (temp.Count > 0) _undoStack.Push(temp.Pop());
+                    }
+                }
                 tr.Commit();
                 ed.Regen();
                 ed.WriteMessage($"\nĐã cập nhật Layer 0 cho {processedBtrs.Count} loại Block.");
@@ -440,8 +478,14 @@ namespace AutoCADBlockTools
             Database db = doc.Database;
             Editor ed = doc.Editor;
             ObjectId targetId = ObjectId.Null;
+            bool wasPreSelected = false;
             PromptSelectionResult implied = ed.SelectImplied();
-            if (implied.Status == PromptStatus.OK && implied.Value.Count > 0) targetId = implied.Value.GetObjectIds()[0];
+            if (implied.Status == PromptStatus.OK && implied.Value.Count > 0)
+            {
+                targetId = implied.Value.GetObjectIds()[0];
+                wasPreSelected = true;
+                ed.SetImpliedSelection(new ObjectId[0]); // Clear to allow updating grips correctly
+            }
             if (targetId == ObjectId.Null)
             {
                 PromptEntityOptions peo = new PromptEntityOptions("\nChọn Block: ");
@@ -451,6 +495,8 @@ namespace AutoCADBlockTools
                 if (per.Status == PromptStatus.OK) targetId = per.ObjectId;
             }
             if (targetId == ObjectId.Null) return;
+
+            UndoHelper.Begin(doc);
             
             using (DocumentLock docLock = doc.LockDocument())
             using (Transaction tr = db.TransactionManager.StartTransaction())
@@ -487,7 +533,7 @@ namespace AutoCADBlockTools
                     
                     foreach (ObjectId id in btr) if (tr.GetObject(id, OpenMode.ForWrite) is Entity ent) ent.TransformBy(transformMatrix);
                     
-                    ObjectIdCollection refIds = btr.GetBlockReferenceIds(true, true);
+                    List<ObjectId> refIds = GetBlockReferenceIdsAll(btr, tr);
                     foreach (ObjectId refId in refIds)
                     {
                         if (tr.GetObject(refId, OpenMode.ForWrite) is BlockReference br)
@@ -496,8 +542,8 @@ namespace AutoCADBlockTools
                             {
                                 Vector3d adjustment = displacement.Negate().TransformBy(br.BlockTransform);
                                 br.Position = br.Position.Add(adjustment);
-                                br.RecordGraphicsModified(true);
                             }
+                            br.RecordGraphicsModified(true);
                         }
                     }
                     tr.Commit();
@@ -513,8 +559,14 @@ namespace AutoCADBlockTools
                     catch { }
 
                     ed.Regen();
+
+                    if (wasPreSelected && targetId != ObjectId.Null && !targetId.IsErased)
+                    {
+                        ed.SetImpliedSelection(new ObjectId[] { targetId });
+                    }
                 }
             }
+            UndoHelper.End(doc);
         }
 
         public static void AutoBlockCenter()
@@ -587,6 +639,7 @@ namespace AutoCADBlockTools
             SelectionSet ss = GetSelection(ed, "\nChọn các Block cần Justify: ");
             if (ss == null || ss.Count == 0) return;
 
+            ObjectId[] selectedIds = ss.GetObjectIds();
             HashSet<string> blockNames = new HashSet<string>();
             using (Transaction tr = doc.TransactionManager.StartTransaction())
             {
@@ -599,6 +652,8 @@ namespace AutoCADBlockTools
             }
 
             if (blockNames.Count == 0) return;
+
+            UndoHelper.Begin(doc);
 
             var window = new JbpWindow(LastJustification, RetainVisualPosition);
             if (Application.ShowModalWindow(window) != true)
@@ -639,7 +694,7 @@ namespace AutoCADBlockTools
                                 }
                             }
 
-                            ObjectIdCollection refIds = btr.GetBlockReferenceIds(true, true);
+                            List<ObjectId> refIds = GetBlockReferenceIdsAll(btr, tr);
                             foreach (ObjectId refId in refIds)
                             {
                                 if (tr.GetObject(refId, OpenMode.ForWrite) is BlockReference blkRef)
@@ -650,8 +705,8 @@ namespace AutoCADBlockTools
                                         Matrix3d blockMat = blkRef.BlockTransform;
                                         Vector3d vecInWorld = vecInBlockSpace.TransformBy(blockMat);
                                         blkRef.Position = blkRef.Position.Add(vecInWorld.Negate());
-                                        blkRef.RecordGraphicsModified(true);
                                     }
+                                    blkRef.RecordGraphicsModified(true);
                                 }
                             }
 
@@ -675,7 +730,17 @@ namespace AutoCADBlockTools
                 }
                 ed.Regen();
                 ed.WriteMessage($"\nĐã cập nhật Base Point cho {blockNames.Count} loại Block.");
+
+                if (selectedIds != null && selectedIds.Length > 0)
+                {
+                    var validIds = selectedIds.Where(id => id.IsValid && !id.IsErased).ToArray();
+                    if (validIds.Length > 0)
+                    {
+                        ed.SetImpliedSelection(validIds);
+                    }
+                }
             }
+            UndoHelper.End(doc);
         }
 
         private static Point3d CalculatePoint(Extents3d ext, Justification jus)
