@@ -541,7 +541,7 @@ namespace AutoCADBlockTools
                         Point3d min = bounds.Value.MinPoint;
                         Point3d max = bounds.Value.MaxPoint;
                         Point3d newBasePoint = new Point3d((min.X + max.X) / 2.0, (min.Y + max.Y) / 2.0, (min.Z + max.Z) / 2.0);
-                        displacement = Point3d.Origin.GetVectorTo(newBasePoint).Negate();
+                        displacement = btr.Origin - newBasePoint;
                     }
                     else
                     {
@@ -550,7 +550,7 @@ namespace AutoCADBlockTools
                         if (ppr.Status != PromptStatus.OK) return;
                         Matrix3d matInv = selectedRef.BlockTransform.Inverse();
                         Point3d pointInBlockSpace = ppr.Value.TransformBy(matInv);
-                        displacement = pointInBlockSpace.GetVectorTo(Point3d.Origin);
+                        displacement = btr.Origin - pointInBlockSpace;
                     }
 
                     if (displacement.Length < Tolerance.Global.EqualVector) return;
@@ -670,18 +670,24 @@ namespace AutoCADBlockTools
             if (ss == null || ss.Count == 0) return;
 
             ObjectId[] selectedIds = ss.GetObjectIds();
-            HashSet<string> blockNames = new HashSet<string>();
+
+            // Thu thập blockName → representative BlockReference (để lấy BlockTransform)
+            Dictionary<string, ObjectId> blockNameToRefId = new Dictionary<string, ObjectId>();
             using (Transaction tr = doc.TransactionManager.StartTransaction())
             {
                 foreach (SelectedObject so in ss)
                 {
                     if (tr.GetObject(so.ObjectId, OpenMode.ForRead) is BlockReference br)
-                        blockNames.Add(GetEffectiveName(br, tr));
+                    {
+                        string name = GetEffectiveName(br, tr);
+                        if (!blockNameToRefId.ContainsKey(name))
+                            blockNameToRefId[name] = so.ObjectId;
+                    }
                 }
                 tr.Commit();
             }
 
-            if (blockNames.Count == 0) return;
+            if (blockNameToRefId.Count == 0) return;
 
             UndoHelper.Begin(doc);
 
@@ -700,49 +706,106 @@ namespace AutoCADBlockTools
             {
                 BlockTable bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
 
-                foreach (string blkName in blockNames)
+                // Lấy ma trận chuyển đổi WCS → UCS hiện tại
+                // Khi UCS bị xoay, "Top/Bottom/Left/Right" trên màn hình khác với WCS
+                Matrix3d ucsMatrix = ed.CurrentUserCoordinateSystem;
+                Matrix3d wcsToUcs = ucsMatrix.Inverse();
+
+                foreach (var kvp in blockNameToRefId)
                 {
+                    string blkName = kvp.Key;
+                    ObjectId representativeRefId = kvp.Value;
+
                     if (!bt.Has(blkName)) continue;
                     ObjectId btrId = bt[blkName];
                     BlockTableRecord btr = (BlockTableRecord)tr.GetObject(btrId, OpenMode.ForRead);
 
                     Extents3d? bounds = GetBlockBoundingBoxForJbp(tr, btr);
-                    if (bounds.HasValue)
+                    if (!bounds.HasValue) continue;
+
+                    // Lấy BlockTransform từ reference đại diện để chuyển BDS → WCS
+                    BlockReference representativeRef = tr.GetObject(representativeRefId, OpenMode.ForRead) as BlockReference;
+                    if (representativeRef == null) continue;
+                    Matrix3d blockTransform = representativeRef.BlockTransform;
+
+                    // ═══ CORE FIX: Tính justification point đúng với UCS hiện tại ═══
+                    // 
+                    // Vấn đề gốc: GetBlockBoundingBoxForJbp trả về bounds trong Block Definition Space (BDS).
+                    // Khi block bị xoay (rotation ≠ 0), "Top" trong BDS ≠ "Top" trên màn hình.
+                    // 
+                    // Giải pháp (theo pattern WCS→DCS của TPL PlotLogic):
+                    // 1. Chuyển 4 góc BDS → WCS qua BlockTransform
+                    // 2. Chuyển WCS → UCS để xác định đúng hướng Top/Bottom/Left/Right theo view
+                    // 3. Tính justification point trong UCS
+                    // 4. Chuyển UCS → WCS → BDS ngược lại
+                    
+                    Point3d bdsMin = bounds.Value.MinPoint;
+                    Point3d bdsMax = bounds.Value.MaxPoint;
+
+                    // 4 góc trong BDS
+                    Point3d[] bdsCorners = new Point3d[]
                     {
-                        Point3d newBasePt = CalculatePoint(bounds.Value, LastJustification);
-                        Vector3d displacement = Point3d.Origin - newBasePt;
+                        new Point3d(bdsMin.X, bdsMin.Y, 0), // BL
+                        new Point3d(bdsMax.X, bdsMin.Y, 0), // BR
+                        new Point3d(bdsMax.X, bdsMax.Y, 0), // TR
+                        new Point3d(bdsMin.X, bdsMax.Y, 0), // TL
+                    };
 
-                        if (displacement.Length > 1e-8)
+                    // BDS → WCS → UCS
+                    double ucsMinX = double.MaxValue, ucsMinY = double.MaxValue;
+                    double ucsMaxX = double.MinValue, ucsMaxY = double.MinValue;
+                    for (int i = 0; i < bdsCorners.Length; i++)
+                    {
+                        Point3d wcsPoint = bdsCorners[i].TransformBy(blockTransform);
+                        Point3d ucsPoint = wcsPoint.TransformBy(wcsToUcs);
+                        if (ucsPoint.X < ucsMinX) ucsMinX = ucsPoint.X;
+                        if (ucsPoint.Y < ucsMinY) ucsMinY = ucsPoint.Y;
+                        if (ucsPoint.X > ucsMaxX) ucsMaxX = ucsPoint.X;
+                        if (ucsPoint.Y > ucsMaxY) ucsMaxY = ucsPoint.Y;
+                    }
+
+                    // Tính justification point trong UCS space
+                    Extents3d ucsBounds = new Extents3d(
+                        new Point3d(ucsMinX, ucsMinY, 0),
+                        new Point3d(ucsMaxX, ucsMaxY, 0));
+                    Point3d justifyPointUcs = CalculatePoint(ucsBounds, LastJustification);
+
+                    // Chuyển UCS → WCS → BDS
+                    Point3d justifyPointWcs = justifyPointUcs.TransformBy(ucsMatrix);
+                    Point3d justifyPointBds = justifyPointWcs.TransformBy(blockTransform.Inverse());
+
+                    Vector3d displacement = btr.Origin - justifyPointBds;
+
+                    if (displacement.Length > 1e-8)
+                    {
+                        btr.UpgradeOpen();
+                        foreach (ObjectId entId in btr)
                         {
-                            btr.UpgradeOpen();
-                            foreach (ObjectId entId in btr)
+                            if (tr.GetObject(entId, OpenMode.ForWrite) is Entity ent)
                             {
-                                if (tr.GetObject(entId, OpenMode.ForWrite) is Entity ent)
-                                {
-                                    ent.TransformBy(Matrix3d.Displacement(displacement));
-                                }
+                                ent.TransformBy(Matrix3d.Displacement(displacement));
                             }
-
-                            List<ObjectId> refIds = GetBlockReferenceIdsAll(btr, tr);
-                            foreach (ObjectId refId in refIds)
-                            {
-                                if (tr.GetObject(refId, OpenMode.ForWrite) is BlockReference blkRef)
-                                {
-                                    if (RetainVisualPosition)
-                                    {
-                                        Vector3d vecInBlockSpace = displacement;
-                                        Matrix3d blockMat = blkRef.BlockTransform;
-                                        Vector3d vecInWorld = vecInBlockSpace.TransformBy(blockMat);
-                                        blkRef.Position = blkRef.Position.Add(vecInWorld.Negate());
-                                    }
-                                    blkRef.RecordGraphicsModified(true);
-                                }
-                            }
-
-                            // Đồng bộ Attribute — truyền refIds đã thu thập
-                            if (btr.HasAttributeDefinitions)
-                                SyncAttributePositions(tr, btr, refIds);
                         }
+
+                        List<ObjectId> refIds = GetBlockReferenceIdsAll(btr, tr);
+                        foreach (ObjectId refId in refIds)
+                        {
+                            if (tr.GetObject(refId, OpenMode.ForWrite) is BlockReference blkRef)
+                            {
+                                if (RetainVisualPosition)
+                                {
+                                    Vector3d vecInBlockSpace = displacement;
+                                    Matrix3d blockMat = blkRef.BlockTransform;
+                                    Vector3d vecInWorld = vecInBlockSpace.TransformBy(blockMat);
+                                    blkRef.Position = blkRef.Position.Add(vecInWorld.Negate());
+                                }
+                                blkRef.RecordGraphicsModified(true);
+                            }
+                        }
+
+                        // Đồng bộ Attribute — truyền refIds đã thu thập
+                        if (btr.HasAttributeDefinitions)
+                            SyncAttributePositions(tr, btr, refIds);
                     }
                 }
                 tr.Commit();
@@ -751,7 +814,7 @@ namespace AutoCADBlockTools
 
             // Chỉ cần UpdateScreen — KHÔNG gọi Regen()
             ed.UpdateScreen();
-            ed.WriteMessage($"\nĐã cập nhật Base Point cho {blockNames.Count} loại Block.");
+            ed.WriteMessage($"\nĐã cập nhật Base Point cho {blockNameToRefId.Count} loại Block.");
 
             // Re-select SAU KHI graphics đã refresh → grip points mới hiển thị đúng
             if (selectedIds != null && selectedIds.Length > 0)
