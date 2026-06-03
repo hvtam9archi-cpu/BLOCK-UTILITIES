@@ -241,7 +241,6 @@ namespace AutoCADBlockTools
                         DeleteBlockInTransaction(tr, db, ed, name);
                     tr.Commit();
                 }
-                foreach (string name in blocksToDelete) DeleteBlockByName(db, ed, name);
                 return;
             }
 
@@ -309,9 +308,9 @@ namespace AutoCADBlockTools
             BlockTable bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
             if (!bt.Has(blockName)) { ed.WriteMessage("\nKhông tìm thấy Block: " + blockName); return; }
 
-                ObjectId btrId = bt[blockName];
-                BlockTableRecord btr = (BlockTableRecord)tr.GetObject(btrId, OpenMode.ForRead);
-                ObjectIdCollection refIds = btr.GetBlockReferenceIds(true, true);
+            ObjectId btrId = bt[blockName];
+            BlockTableRecord btr = (BlockTableRecord)tr.GetObject(btrId, OpenMode.ForRead);
+            ObjectIdCollection refIds = btr.GetBlockReferenceIds(true, true);
 
             int count = 0;
             foreach (ObjectId refId in refIds)
@@ -320,23 +319,20 @@ namespace AutoCADBlockTools
                 if (!obj.IsErased) { obj.Erase(); count++; }
             }
 
-                try
+            try
+            {
+                if (btr.GetBlockReferenceIds(true, true).Count == 0)
                 {
-                    if (btr.GetBlockReferenceIds(true, true).Count == 0)
-                    {
-                        btr.UpgradeOpen();
-                        btr.Erase();
-                        ed.WriteMessage($"\nĐã xóa {count} đối tượng và Purge định nghĩa Block '{blockName}'.");
-                    }
-                    else
-                        ed.WriteMessage($"\nĐã xóa {count} đối tượng Block '{blockName}'.");
+                    btr.UpgradeOpen();
+                    btr.Erase();
+                    ed.WriteMessage($"\nĐã xóa {count} đối tượng và Purge định nghĩa Block '{blockName}'.");
                 }
-                catch { ed.WriteMessage($"\nĐã xóa {count} đối tượng Block '{blockName}'."); }
-
-                tr.Commit();
-                ed.Regen();
+                else
+                    ed.WriteMessage($"\nĐã xóa {count} đối tượng Block '{blockName}'.");
             }
+            catch { ed.WriteMessage($"\nĐã xóa {count} đối tượng Block '{blockName}'."); }
         }
+
 
         public static void ChangeBlockToLayer0()
         {
@@ -571,14 +567,19 @@ namespace AutoCADBlockTools
                         SyncAttributePositions(tr, btr);
 
                     tr.Commit();
-                    ed.Regen();
-
-                    if (wasPreSelected && targetId != ObjectId.Null && !targetId.IsErased)
-                    {
-                        ed.SetImpliedSelection(new ObjectId[] { targetId });
-                    }
+                    db.TransactionManager.QueueForGraphicsFlush();
                 }
             }
+
+            // Force refresh graphics pipeline SAU KHI transaction đã dispose hoàn toàn
+            ed.UpdateScreen();
+            ed.Regen();
+
+            if (wasPreSelected && targetId != ObjectId.Null && !targetId.IsErased)
+            {
+                ed.SetImpliedSelection(new ObjectId[] { targetId });
+            }
+
             UndoHelper.End(doc);
         }
 
@@ -734,18 +735,22 @@ namespace AutoCADBlockTools
                     }
                 }
                 tr.Commit();
-                ed.Regen();
-                ed.WriteMessage($"\nĐã cập nhật Base Point cho {blockNames.Count} loại Block.");
-
-                if (selectedIds != null && selectedIds.Length > 0)
-                {
-                    var validIds = selectedIds.Where(id => id.IsValid && !id.IsErased).ToArray();
-                    if (validIds.Length > 0)
-                    {
-                        ed.SetImpliedSelection(validIds);
-                    }
-                }
+                db.TransactionManager.QueueForGraphicsFlush();
             }
+
+            // Force refresh graphics pipeline SAU KHI transaction đã dispose hoàn toàn
+            ed.UpdateScreen();
+            ed.Regen();
+            ed.WriteMessage($"\nĐã cập nhật Base Point cho {blockNames.Count} loại Block.");
+
+            // Re-select SAU KHI graphics đã refresh → grip points mới hiển thị đúng
+            if (selectedIds != null && selectedIds.Length > 0)
+            {
+                var validIds = selectedIds.Where(id => id.IsValid && !id.IsErased).ToArray();
+                if (validIds.Length > 0)
+                    ed.SetImpliedSelection(validIds);
+            }
+
             UndoHelper.End(doc);
         }
 
