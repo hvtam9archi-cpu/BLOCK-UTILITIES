@@ -4,6 +4,7 @@ using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.EditorInput;
 using Autodesk.AutoCAD.Runtime;
+using AutoCADBlockTools.Services;
 using AutoCADBlockTools.UI;
 using Application = Autodesk.AutoCAD.ApplicationServices.Application;
 
@@ -22,23 +23,22 @@ namespace AutoCADBlockTools
         {
             Document doc = Application.DocumentManager.MdiActiveDocument;
             Editor ed = doc.Editor;
+            var settings = BlockSettings.Instance;
 
             try
             {
-                var window = new RandomSettingsWindow(BlockLogic.MinScale, BlockLogic.MaxScale, BlockLogic.MinRotate, BlockLogic.MaxRotate);
+                var window = new RandomSettingsWindow(settings.MinScale, settings.MaxScale, settings.MinRotate, settings.MaxRotate);
                 if (Application.ShowModalWindow(window) == true)
                 {
-                    BlockLogic.MinScale = window.MinScale;
-                    BlockLogic.MaxScale = window.MaxScale;
-                    if (BlockLogic.MinScale > BlockLogic.MaxScale)
-                        (BlockLogic.MaxScale, BlockLogic.MinScale) = (BlockLogic.MinScale, BlockLogic.MaxScale);
+                    settings.MinScale = window.MinScale;
+                    settings.MaxScale = window.MaxScale;
+                    settings.ValidateScale();
 
-                    BlockLogic.MinRotate = window.MinAngle;
-                    BlockLogic.MaxRotate = window.MaxAngle;
-                    if (BlockLogic.MinRotate > BlockLogic.MaxRotate)
-                        (BlockLogic.MaxRotate, BlockLogic.MinRotate) = (BlockLogic.MinRotate, BlockLogic.MaxRotate);
+                    settings.MinRotate = window.MinAngle;
+                    settings.MaxRotate = window.MaxAngle;
+                    settings.ValidateRotate();
 
-                    ed.WriteMessage($"\nĐã cập nhật Global Settings: Scale [{BlockLogic.MinScale}-{BlockLogic.MaxScale}], Rotate [{BlockLogic.MinRotate}-{BlockLogic.MaxRotate}]");
+                    ed.WriteMessage($"\nĐã cập nhật Global Settings: Scale [{settings.MinScale}-{settings.MaxScale}], Rotate [{settings.MinRotate}-{settings.MaxRotate}]");
                 }
             }
             catch (System.Exception ex)

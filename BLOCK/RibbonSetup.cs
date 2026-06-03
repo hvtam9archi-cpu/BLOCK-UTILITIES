@@ -10,7 +10,7 @@ namespace AutoCADBlockTools
     {
         private const string TabId = "TH_TOOLS_TAB";
         private const string TabTitle = "TH Tools";
-        private RibbonCommandHandler _cmdHandler = new RibbonCommandHandler();
+        private readonly RibbonCommandHandler _cmdHandler = new();
 
         public void Initialize()
         {
@@ -69,39 +69,39 @@ namespace AutoCADBlockTools
 
             if (!panelExists)
             {
-                RibbonPanelSource rps = new RibbonPanelSource { Title = "Block Utilities", Id = panelId };
-                RibbonPanel rp = new RibbonPanel { Source = rps };
+                RibbonPanelSource rps = new() { Title = "Block Utilities", Id = panelId };
+                RibbonPanel rp = new() { Source = rps };
 
                 // --- Nhóm 1: Transformation ---
-                AddGroupToPanel(rps, new[] {
+                AddGroupToPanel(rps, [
                     CreateButton("RSET", "Random Settings", "RSET"),
                     CreateButton("RSC", "Random Scale", "RSC"),
                     CreateButton("RRT", "Random Rotate", "RRT"),
                     CreateButton("RAL", "Random Align", "RAL"),
                     CreateButton("RR", "Reset Blocks", "RR"),
                     CreateButton("RB", "Rename Block", "RB")
-                });
+                ]);
 
                 rps.Items.Add(new RibbonSeparator());
 
                 // --- Nhóm 2: Management ---
-                AddGroupToPanel(rps, new[] {
+                AddGroupToPanel(rps, [
                     CreateButton("DELB", "Delete Blocks", "DELB"),
                     CreateButton("DLB", "To Layer 0", "DLB"),
                     CreateButton("UDLB", "Undo Layer", "UDLB"),
-                });
+                ]);
 
                 rps.Items.Add(new RibbonSeparator());
 
                 // --- Nhóm 3: Base Point ---
-                AddGroupToPanel(rps, new[] {
+                AddGroupToPanel(rps, [
                     CreateButton("CB", "Center Base", "CB"),
                     CreateButton("CBP", "Change Base", "CBP"),
                     CreateButton("CBPR", "Change Base (R)", "CBPR"),
                     CreateButton("AB", "Auto Block", "AB"),
                     CreateButton("JBP", "Justify Base", "JBP"),
                     CreateButton("MU", "Make Unique", "MU"),
-				});
+				]);
 
                 rtb.Panels.Add(rp);
             }
@@ -148,7 +148,7 @@ namespace AutoCADBlockTools
         // Tạo Icon cỡ nhỏ 16x16
         private System.Windows.Media.ImageSource GetTextBitmap16(string text)
         {
-            System.Windows.Media.DrawingVisual visual = new System.Windows.Media.DrawingVisual();
+            System.Windows.Media.DrawingVisual visual = new();
             using (System.Windows.Media.DrawingContext dc = visual.RenderOpen())
             {
                 // Nền Accent Color
@@ -157,7 +157,7 @@ namespace AutoCADBlockTools
                 // Viền trắng
                 dc.DrawRectangle(null, new System.Windows.Media.Pen(System.Windows.Media.Brushes.White, 0.5), new System.Windows.Rect(0.5, 0.5, 15, 15));
 
-                System.Windows.Media.FormattedText ft = new System.Windows.Media.FormattedText(
+                System.Windows.Media.FormattedText ft = new(
                     text.Length > 2 ? text.Substring(0, 2) : text, // Tối đa 2 ký tự cho 16x16
                     System.Globalization.CultureInfo.InvariantCulture,
                     System.Windows.FlowDirection.LeftToRight,
@@ -170,7 +170,7 @@ namespace AutoCADBlockTools
                 dc.DrawText(ft, new System.Windows.Point((16 - ft.Width) / 2, (16 - ft.Height) / 2));
             }
             
-            System.Windows.Media.Imaging.RenderTargetBitmap rtb = new System.Windows.Media.Imaging.RenderTargetBitmap(16, 16, 96, 96, System.Windows.Media.PixelFormats.Pbgra32);
+            System.Windows.Media.Imaging.RenderTargetBitmap rtb = new(16, 16, 96, 96, System.Windows.Media.PixelFormats.Pbgra32);
             rtb.Render(visual);
             return rtb;
         }
@@ -194,10 +194,7 @@ namespace AutoCADBlockTools
             if (!string.IsNullOrEmpty(cmd))
             {
                 Autodesk.AutoCAD.ApplicationServices.Document doc = Application.DocumentManager.MdiActiveDocument;
-                if (doc != null)
-                {
-                    doc.SendStringToExecute(cmd, true, false, true);
-                }
+                doc?.SendStringToExecute(cmd, true, false, true);
             }
         }
     }

@@ -73,9 +73,9 @@
             <!-- Bottom Bar -->
             <Border Grid.Row="2" Background="{StaticResource TitleBarBrush}" CornerRadius="0,0,10,10" Padding="14,0,14,0">
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-                    <Button Content="Cancel" Style="{StaticResource DarkButton}" Click="BtnCancel_Click" Margin="0,0,8,0"/>
-                    <Button Content="OK" Style="{StaticResource AccentButton}" Click="BtnOk_Click"/>
-                </StackPanel>
+					<Button Content="OK" Style="{StaticResource AccentButton}" Click="BtnOk_Click" Margin="0,0,8,0"/>
+					<Button Content="Cancel" Style="{StaticResource DarkButton}" Click="BtnCancel_Click"/>
+				</StackPanel>
             </Border>
         </Grid>
     </Border>
