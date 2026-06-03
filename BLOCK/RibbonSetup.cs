@@ -89,7 +89,6 @@ namespace AutoCADBlockTools
                     CreateButton("DELB", "Delete Blocks", "DELB"),
                     CreateButton("DLB", "To Layer 0", "DLB"),
                     CreateButton("UDLB", "Undo Layer", "UDLB"),
-                    CreateButton("MU", "Make Unique", "MU")
                 });
 
                 rps.Items.Add(new RibbonSeparator());
@@ -100,8 +99,9 @@ namespace AutoCADBlockTools
                     CreateButton("CBP", "Change Base", "CBP"),
                     CreateButton("CBPR", "Change Base (R)", "CBPR"),
                     CreateButton("AB", "Auto Block", "AB"),
-                    CreateButton("JBP", "Justify Base", "JBP")
-                });
+                    CreateButton("JBP", "Justify Base", "JBP"),
+                    CreateButton("MU", "Make Unique", "MU"),
+				});
 
                 rtb.Panels.Add(rp);
             }
