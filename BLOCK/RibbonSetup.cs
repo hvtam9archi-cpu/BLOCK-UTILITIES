@@ -178,7 +178,9 @@ namespace AutoCADBlockTools
 
     public class RibbonCommandHandler : ICommand
     {
+#pragma warning disable CS0067 // Required by ICommand, CanExecute always returns true
         public event EventHandler CanExecuteChanged;
+#pragma warning restore CS0067
         public bool CanExecute(object parameter) => true;
 
         public void Execute(object parameter)

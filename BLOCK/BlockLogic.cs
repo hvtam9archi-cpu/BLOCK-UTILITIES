@@ -25,7 +25,6 @@ namespace AutoCADBlockTools
         public static bool RetainVisualPosition = true;
 
         // Undo Stack for DLB
-        private const int MaxUndoLevels = 10;
         private static readonly Stack<List<EntityBackupState>> _undoStack = new Stack<List<EntityBackupState>>();
         private static Database _databaseForUndo;
 
@@ -172,7 +171,10 @@ namespace AutoCADBlockTools
                             count++;
                         }
                     }
-                    catch { }
+                    catch (System.Exception ex)
+                    {
+                        ed.WriteMessage($"\nWarning (Transform): {ex.Message}");
+                    }
                 }
                 tr.Commit();
                 ed.WriteMessage($"\nĐã biến đổi thành công {count} đối tượng.");
@@ -202,7 +204,10 @@ namespace AutoCADBlockTools
                             count++;
                         }
                     }
-                    catch { }
+                    catch (System.Exception ex)
+                    {
+                        ed.WriteMessage($"\nWarning (Reset): {ex.Message}");
+                    }
                 }
                 tr.Commit();
                 ed.WriteMessage($"\nĐã Reset {count} block về trạng thái mặc định.");
@@ -219,11 +224,12 @@ namespace AutoCADBlockTools
             Editor ed = doc.Editor;
             SelectionSet ss = GetSelection(ed, "");
 
-            // Xóa theo Selection
+            // === Mode 1: Xóa theo Selection (1 transaction = 1 Ctrl+Z) ===
             if (ss != null && ss.Count > 0)
             {
                 UndoHelper.Begin(doc);
                 HashSet<string> blocksToDelete = new HashSet<string>();
+                using (DocumentLock docLock = doc.LockDocument())
                 using (Transaction tr = db.TransactionManager.StartTransaction())
                 {
                     foreach (SelectedObject so in ss)
@@ -231,14 +237,16 @@ namespace AutoCADBlockTools
                         if (tr.GetObject(so.ObjectId, OpenMode.ForRead) is BlockReference br)
                             blocksToDelete.Add(GetEffectiveName(br, tr));
                     }
+                    foreach (string name in blocksToDelete)
+                        DeleteBlockInTransaction(tr, db, ed, name);
                     tr.Commit();
                 }
                 foreach (string name in blocksToDelete) DeleteBlockByName(db, ed, name);
-                UndoHelper.End(doc);
                 return;
             }
 
-            // Xóa theo Tên (Dialog/String)
+            // === Mode 2: Xóa tương tác — thu thập tên trước, xóa 1 lần sau ===
+            HashSet<string> collectedNames = new HashSet<string>();
             while (true)
             {
                 PromptEntityOptions peo = new PromptEntityOptions("\nChọn Block để xóa [Name/Exit] <Exit>: ") { AllowNone = true };
@@ -266,35 +274,55 @@ namespace AutoCADBlockTools
                     {
                         if (tr.GetObject(per.ObjectId, OpenMode.ForRead) is BlockReference br)
                             blockName = GetEffectiveName(br, tr);
+                        tr.Commit();
                     }
                 }
                 else break;
-                if (!string.IsNullOrEmpty(blockName)) DeleteBlockByName(db, ed, blockName);
+
+                if (!string.IsNullOrEmpty(blockName))
+                {
+                    collectedNames.Add(blockName);
+                    ed.WriteMessage($"\n→ Đã thêm '{blockName}' vào danh sách xóa.");
+                }
+            }
+
+            // Xóa tất cả trong 1 transaction = 1 Ctrl+Z
+            if (collectedNames.Count > 0)
+            {
+                using (DocumentLock docLock = doc.LockDocument())
+                using (Transaction tr = db.TransactionManager.StartTransaction())
+                {
+                    foreach (string name in collectedNames)
+                        DeleteBlockInTransaction(tr, db, ed, name);
+                    tr.Commit();
+                }
+                ed.Regen();
             }
         }
 
-        private static void DeleteBlockByName(Database db, Editor ed, string blockName)
+        /// <summary>
+        /// Xóa tất cả references + purge block definition trong Transaction đã mở.
+        /// KHÔNG tự tạo Transaction → đảm bảo 1 Ctrl+Z cho toàn bộ lệnh.
+        /// </summary>
+        private static void DeleteBlockInTransaction(Transaction tr, Database db, Editor ed, string blockName)
         {
-            using (DocumentLock docLock = Application.DocumentManager.MdiActiveDocument.LockDocument())
-            using (Transaction tr = db.TransactionManager.StartTransaction())
-            {
-                BlockTable bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
-                if (!bt.Has(blockName)) { ed.WriteMessage("\nKhông tìm thấy Block: " + blockName); return; }
+            BlockTable bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
+            if (!bt.Has(blockName)) { ed.WriteMessage("\nKhông tìm thấy Block: " + blockName); return; }
 
                 ObjectId btrId = bt[blockName];
                 BlockTableRecord btr = (BlockTableRecord)tr.GetObject(btrId, OpenMode.ForRead);
-                List<ObjectId> refIds = GetBlockReferenceIdsAll(btr, tr);
+                ObjectIdCollection refIds = btr.GetBlockReferenceIds(true, true);
 
-                int count = 0;
-                foreach (ObjectId refId in refIds)
-                {
-                    DBObject obj = tr.GetObject(refId, OpenMode.ForWrite);
-                    if (!obj.IsErased) { obj.Erase(); count++; }
-                }
+            int count = 0;
+            foreach (ObjectId refId in refIds)
+            {
+                DBObject obj = tr.GetObject(refId, OpenMode.ForWrite);
+                if (!obj.IsErased) { obj.Erase(); count++; }
+            }
 
                 try
                 {
-                    if (GetBlockReferenceIdsAll(btr, tr).Count == 0)
+                    if (btr.GetBlockReferenceIds(true, true).Count == 0)
                     {
                         btr.UpgradeOpen();
                         btr.Erase();
@@ -342,18 +370,7 @@ namespace AutoCADBlockTools
                     ProcessBlockDefinition(tr, btrId, processedBtrs, currentBatchBackup);
                 }
 
-                if (currentBatchBackup.Count > 0)
-                {
-                    _undoStack.Push(currentBatchBackup);
-                    while (_undoStack.Count > MaxUndoLevels)
-                    {
-                        // Loại bỏ entry cũ nhất để tránh tích lũy bộ nhớ vô hạn
-                        var temp = new Stack<List<EntityBackupState>>();
-                        while (_undoStack.Count > 1) temp.Push(_undoStack.Pop());
-                        _undoStack.Pop(); // Bỏ entry cũ nhất (đáy stack)
-                        while (temp.Count > 0) _undoStack.Push(temp.Pop());
-                    }
-                }
+                if (currentBatchBackup.Count > 0) _undoStack.Push(currentBatchBackup);
                 tr.Commit();
                 ed.Regen();
                 ed.WriteMessage($"\nĐã cập nhật Layer 0 cho {processedBtrs.Count} loại Block.");
@@ -408,7 +425,10 @@ namespace AutoCADBlockTools
                             Entity ent = tr.GetObject(state.EntityId, OpenMode.ForWrite) as Entity;
                             if (ent != null) { ent.Layer = state.OldLayer; ent.Color = state.OldColor; count++; }
                         }
-                        catch { }
+                        catch (System.Exception ex)
+                        {
+                            ed.WriteMessage($"\nWarning (UndoDLB): {ex.Message}");
+                        }
                     }
                 }
                 tr.Commit();
@@ -546,18 +566,11 @@ namespace AutoCADBlockTools
                             br.RecordGraphicsModified(true);
                         }
                     }
+                    // Đồng bộ Attribute trong CÙNG transaction → Ctrl+Z undo toàn bộ 1 lần
+                    if (btr.HasAttributeDefinitions)
+                        SyncAttributePositions(tr, btr);
+
                     tr.Commit();
-
-                    try
-                    {
-                        using (Transaction trSync = doc.TransactionManager.StartTransaction())
-                        {
-                            BlockTableRecord btrSync = (BlockTableRecord)trSync.GetObject(btrId, OpenMode.ForRead);
-                            if (btrSync.HasAttributeDefinitions) ed.Command("_.ATTSYNC", "_N", btrSync.Name);
-                        }
-                    }
-                    catch { }
-
                     ed.Regen();
 
                     if (wasPreSelected && targetId != ObjectId.Null && !targetId.IsErased)
@@ -612,8 +625,13 @@ namespace AutoCADBlockTools
                 if (first) return;
                 
                 Point3d center = new Point3d((totalExtents.MinPoint.X + totalExtents.MaxPoint.X) / 2.0, (totalExtents.MinPoint.Y + totalExtents.MaxPoint.Y) / 2.0, (totalExtents.MinPoint.Z + totalExtents.MaxPoint.Z) / 2.0);
-                string blockName = $"@{DateTime.Now.Ticks.ToString().Substring(0, 16)}";
-                while (bt.Has(blockName)) blockName = $"@{DateTime.Now.Ticks.ToString().Substring(0, 16)}";
+                string blockName;
+                int nameAttempt = 0;
+                do
+                {
+                    blockName = $"@{DateTime.Now.Ticks + nameAttempt}";
+                    nameAttempt++;
+                } while (bt.Has(blockName) && nameAttempt < 1000);
                 
                 BlockTableRecord newBtr = new BlockTableRecord { Name = blockName, Origin = center };
                 bt.Add(newBtr);
@@ -669,7 +687,6 @@ namespace AutoCADBlockTools
             using (Transaction tr = doc.TransactionManager.StartTransaction())
             {
                 BlockTable bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
-                HashSet<ObjectId> blocksToSync = new HashSet<ObjectId>();
 
                 foreach (string blkName in blockNames)
                 {
@@ -710,24 +727,13 @@ namespace AutoCADBlockTools
                                 }
                             }
 
-                            if (btr.HasAttributeDefinitions) blocksToSync.Add(btrId);
+                            // Đồng bộ Attribute trong CÙNG transaction → Ctrl+Z undo toàn bộ 1 lần
+                            if (btr.HasAttributeDefinitions)
+                                SyncAttributePositions(tr, btr);
                         }
                     }
                 }
                 tr.Commit();
-
-                foreach (ObjectId btrId in blocksToSync)
-                {
-                    try
-                    {
-                        using (Transaction trSync = doc.TransactionManager.StartTransaction())
-                        {
-                            BlockTableRecord btr = (BlockTableRecord)trSync.GetObject(btrId, OpenMode.ForRead);
-                            ed.Command("_.ATTSYNC", "_N", btr.Name);
-                        }
-                    }
-                    catch { }
-                }
                 ed.Regen();
                 ed.WriteMessage($"\nĐã cập nhật Base Point cho {blockNames.Count} loại Block.");
 
@@ -764,6 +770,72 @@ namespace AutoCADBlockTools
             }
         }
 
+        /// <summary>
+        /// Đồng bộ vị trí/style AttributeReference trên tất cả BlockReference sau khi thay đổi BlockTableRecord.
+        /// Thay thế ed.Command("_.ATTSYNC") để giữ mọi thay đổi trong cùng 1 Transaction → 1 lần Ctrl+Z.
+        /// </summary>
+        private static void SyncAttributePositions(Transaction tr, BlockTableRecord btr)
+        {
+            // Thu thập tất cả AttributeDefinition (non-constant) từ block definition
+            var attDefs = new Dictionary<string, AttributeDefinition>(StringComparer.OrdinalIgnoreCase);
+            foreach (ObjectId id in btr)
+            {
+                if (tr.GetObject(id, OpenMode.ForRead) is AttributeDefinition attDef && !attDef.Constant)
+                    attDefs[attDef.Tag] = attDef;
+            }
+            if (attDefs.Count == 0) return;
+
+            // Cập nhật từng BlockReference
+            ObjectIdCollection refIds = btr.GetBlockReferenceIds(true, true);
+            foreach (ObjectId refId in refIds)
+            {
+                if (!(tr.GetObject(refId, OpenMode.ForWrite) is BlockReference blockRef)) continue;
+
+                // Map tag → ObjectId của AttributeReference hiện có
+                var existingAtts = new Dictionary<string, ObjectId>(StringComparer.OrdinalIgnoreCase);
+                foreach (ObjectId attId in blockRef.AttributeCollection)
+                {
+                    if (tr.GetObject(attId, OpenMode.ForRead) is AttributeReference attRef)
+                        existingAtts[attRef.Tag] = attId;
+                }
+
+                // Cập nhật hoặc thêm mới AttributeReference
+                foreach (var kvp in attDefs)
+                {
+                    if (existingAtts.TryGetValue(kvp.Key, out ObjectId existingId))
+                    {
+                        // Cập nhật vị trí/style từ definition, giữ nguyên giá trị text
+                        if (tr.GetObject(existingId, OpenMode.ForWrite) is AttributeReference attRef)
+                        {
+                            string savedText = attRef.TextString;
+                            attRef.SetAttributeFromBlock(kvp.Value, blockRef.BlockTransform);
+                            attRef.TextString = savedText;
+                            attRef.AdjustAlignment(blockRef.Database);
+                        }
+                    }
+                    else
+                    {
+                        // Thêm attribute mới nếu definition có mà reference thiếu
+                        AttributeReference newAttRef = new AttributeReference();
+                        newAttRef.SetAttributeFromBlock(kvp.Value, blockRef.BlockTransform);
+                        newAttRef.TextString = kvp.Value.TextString;
+                        blockRef.AttributeCollection.AppendAttribute(newAttRef);
+                        tr.AddNewlyCreatedDBObject(newAttRef, true);
+                    }
+                }
+
+                // Xóa attribute không còn definition tương ứng
+                foreach (var kvp in existingAtts)
+                {
+                    if (!attDefs.ContainsKey(kvp.Key))
+                    {
+                        if (tr.GetObject(kvp.Value, OpenMode.ForWrite) is Entity entToErase)
+                            entToErase.Erase();
+                    }
+                }
+            }
+        }
+
         private static Extents3d? GetBlockBoundingBoxForJbp(Transaction tr, BlockTableRecord btr)
         {
             Extents3d? totalExtents = null;
@@ -784,7 +856,7 @@ namespace AutoCADBlockTools
                         }
                     }
                 }
-                catch { }
+                catch (System.Exception) { /* Entity không có Bounds — bỏ qua */ }
             }
             return totalExtents;
         }
