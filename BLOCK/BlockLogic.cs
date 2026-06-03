@@ -28,24 +28,32 @@ namespace AutoCADBlockTools
         private static readonly Stack<List<EntityBackupState>> _undoStack = new Stack<List<EntityBackupState>>();
         private static Database _databaseForUndo;
 
-        // Helper: Get Selection
+        // =====================================================================
+        // Helper: Lọc Block từ implied selection KHÔNG cần Transaction
+        // ObjectClass.DxfName là metadata sẵn có trên ObjectId, không truy cập DB.
+        // =====================================================================
+        private static ObjectId[] FilterBlockIdsNoTransaction(ObjectId[] ids)
+        {
+            List<ObjectId> blockIds = new List<ObjectId>(ids.Length);
+            for (int i = 0; i < ids.Length; i++)
+            {
+                if (ids[i].ObjectClass.DxfName == "INSERT")
+                    blockIds.Add(ids[i]);
+            }
+            return blockIds.Count > 0 ? blockIds.ToArray() : null;
+        }
+
+        // Helper: Get Selection — không mở Transaction dư thừa
         private static SelectionSet GetSelection(Editor ed, string promptMsg)
         {
             PromptSelectionResult implied = ed.SelectImplied();
             if (implied.Status == PromptStatus.OK && implied.Value.Count > 0)
             {
-                ObjectId[] ids = implied.Value.GetObjectIds();
-                ObjectIdCollection blockIds = new ObjectIdCollection();
-                using (Transaction tr = ed.Document.Database.TransactionManager.StartTransaction())
-                {
-                    foreach (ObjectId id in ids)
-                        if (id.ObjectClass.DxfName == "INSERT") blockIds.Add(id);
-                    tr.Commit();
-                }
-                if (blockIds.Count > 0)
+                ObjectId[] filtered = FilterBlockIdsNoTransaction(implied.Value.GetObjectIds());
+                if (filtered != null)
                 {
                     ed.SetImpliedSelection(new ObjectId[0]);
-                    return SelectionSet.FromObjectIds(blockIds.Cast<ObjectId>().ToArray());
+                    return SelectionSet.FromObjectIds(filtered);
                 }
             }
 
@@ -75,22 +83,25 @@ namespace AutoCADBlockTools
         // Helper: Get all block reference IDs, including anonymous block references for dynamic blocks
         private static List<ObjectId> GetBlockReferenceIdsAll(BlockTableRecord btr, Transaction tr)
         {
-            List<ObjectId> ids = new List<ObjectId>();
-            foreach (ObjectId id in btr.GetBlockReferenceIds(true, true))
+            ObjectIdCollection directIds = btr.GetBlockReferenceIds(true, true);
+            // Fast path: không phải Dynamic Block → trả về trực tiếp, tránh tạo List mới
+            if (!btr.IsDynamicBlock)
             {
-                ids.Add(id);
+                List<ObjectId> result = new List<ObjectId>(directIds.Count);
+                foreach (ObjectId id in directIds) result.Add(id);
+                return result;
             }
-            if (btr.IsDynamicBlock)
+
+            ObjectIdCollection anonBtrIds = btr.GetAnonymousBlockIds();
+            List<ObjectId> ids = new List<ObjectId>(directIds.Count + anonBtrIds.Count * 4);
+            foreach (ObjectId id in directIds) ids.Add(id);
+
+            foreach (ObjectId anonBtrId in anonBtrIds)
             {
-                foreach (ObjectId anonBtrId in btr.GetAnonymousBlockIds())
+                if (tr.GetObject(anonBtrId, OpenMode.ForRead) is BlockTableRecord anonBtr)
                 {
-                    if (tr.GetObject(anonBtrId, OpenMode.ForRead) is BlockTableRecord anonBtr)
-                    {
-                        foreach (ObjectId id in anonBtr.GetBlockReferenceIds(true, true))
-                        {
-                            ids.Add(id);
-                        }
-                    }
+                    foreach (ObjectId id in anonBtr.GetBlockReferenceIds(true, true))
+                        ids.Add(id);
                 }
             }
             return ids;
@@ -106,21 +117,15 @@ namespace AutoCADBlockTools
             Editor ed = doc.Editor;
             SelectionSet ss = null;
 
-            // PickFirst logic
+            // PickFirst logic — không cần Transaction, DxfName là metadata
             PromptSelectionResult implied = ed.SelectImplied();
             if (implied.Status == PromptStatus.OK && implied.Value.Count > 0)
             {
-                ObjectId[] ids = implied.Value.GetObjectIds();
-                ObjectIdCollection blockIds = new ObjectIdCollection();
-                using (Transaction tr = db.TransactionManager.StartTransaction())
-                {
-                    foreach (ObjectId id in ids) if (id.ObjectClass.DxfName == "INSERT") blockIds.Add(id);
-                    tr.Commit();
-                }
-                if (blockIds.Count > 0)
+                ObjectId[] filtered = FilterBlockIdsNoTransaction(implied.Value.GetObjectIds());
+                if (filtered != null)
                 {
                     ed.SetImpliedSelection(new ObjectId[0]);
-                    ss = SelectionSet.FromObjectIds(blockIds.Cast<ObjectId>().ToArray());
+                    ss = SelectionSet.FromObjectIds(filtered);
                 }
             }
 
@@ -269,6 +274,7 @@ namespace AutoCADBlockTools
                 }
                 else if (per.Status == PromptStatus.OK)
                 {
+                    // Lấy tên block — chỉ cần đọc, transaction ngắn nhất có thể
                     using (Transaction tr = db.TransactionManager.StartTransaction())
                     {
                         if (tr.GetObject(per.ObjectId, OpenMode.ForRead) is BlockReference br)
@@ -295,7 +301,8 @@ namespace AutoCADBlockTools
                         DeleteBlockInTransaction(tr, db, ed, name);
                     tr.Commit();
                 }
-                ed.Regen();
+                // Chỉ cần FlushGraphics, KHÔNG gọi Regen()
+                db.TransactionManager.QueueForGraphicsFlush();
             }
         }
 
@@ -321,7 +328,9 @@ namespace AutoCADBlockTools
 
             try
             {
-                if (btr.GetBlockReferenceIds(true, true).Count == 0)
+                // Nếu đã xóa hết tất cả references thì purge luôn definition
+                // Không gọi lại GetBlockReferenceIds lần 2 — chỉ cần so sánh count
+                if (count == refIds.Count)
                 {
                     btr.UpgradeOpen();
                     btr.Erase();
@@ -368,7 +377,8 @@ namespace AutoCADBlockTools
 
                 if (currentBatchBackup.Count > 0) _undoStack.Push(currentBatchBackup);
                 tr.Commit();
-                ed.Regen();
+                // QueueForGraphicsFlush thay cho Regen — nhẹ hơn rất nhiều
+                db.TransactionManager.QueueForGraphicsFlush();
                 ed.WriteMessage($"\nĐã cập nhật Layer 0 cho {processedBtrs.Count} loại Block.");
             }
         }
@@ -428,7 +438,8 @@ namespace AutoCADBlockTools
                     }
                 }
                 tr.Commit();
-                ed.Regen();
+                // QueueForGraphicsFlush thay cho Regen
+                db.TransactionManager.QueueForGraphicsFlush();
                 ed.WriteMessage($"\nĐã hoàn tác (UDLB) cho {count} đối tượng.");
             }
         }
@@ -464,7 +475,7 @@ namespace AutoCADBlockTools
                     ObjectId originalBtrId = refsToUpdate[0].DynamicBlockTableRecord;
                     int index = 1;
                     string newName;
-                    do { newName = $"{originalName}_{index++}"; } while (bt.Has(newName));
+                    do { newName = $"{originalName}_{index++}"; } while (bt.Has(newName) && index < 1000);
                     
                     BlockTableRecord newBtr = new BlockTableRecord { Name = newName };
                     bt.Add(newBtr);
@@ -563,17 +574,17 @@ namespace AutoCADBlockTools
                         }
                     }
                     // Đồng bộ Attribute trong CÙNG transaction → Ctrl+Z undo toàn bộ 1 lần
+                    // Truyền refIds đã có thay vì gọi lại GetBlockReferenceIds bên trong
                     if (btr.HasAttributeDefinitions)
-                        SyncAttributePositions(tr, btr);
+                        SyncAttributePositions(tr, btr, refIds);
 
                     tr.Commit();
                     db.TransactionManager.QueueForGraphicsFlush();
                 }
             }
 
-            // Force refresh graphics pipeline SAU KHI transaction đã dispose hoàn toàn
+            // UpdateScreen nhẹ hơn Regen, chỉ cần 1 trong 2
             ed.UpdateScreen();
-            ed.Regen();
 
             if (wasPreSelected && targetId != ObjectId.Null && !targetId.IsErased)
             {
@@ -728,9 +739,9 @@ namespace AutoCADBlockTools
                                 }
                             }
 
-                            // Đồng bộ Attribute trong CÙNG transaction → Ctrl+Z undo toàn bộ 1 lần
+                            // Đồng bộ Attribute — truyền refIds đã thu thập
                             if (btr.HasAttributeDefinitions)
-                                SyncAttributePositions(tr, btr);
+                                SyncAttributePositions(tr, btr, refIds);
                         }
                     }
                 }
@@ -738,9 +749,8 @@ namespace AutoCADBlockTools
                 db.TransactionManager.QueueForGraphicsFlush();
             }
 
-            // Force refresh graphics pipeline SAU KHI transaction đã dispose hoàn toàn
+            // Chỉ cần UpdateScreen — KHÔNG gọi Regen()
             ed.UpdateScreen();
-            ed.Regen();
             ed.WriteMessage($"\nĐã cập nhật Base Point cho {blockNames.Count} loại Block.");
 
             // Re-select SAU KHI graphics đã refresh → grip points mới hiển thị đúng
@@ -778,8 +788,9 @@ namespace AutoCADBlockTools
         /// <summary>
         /// Đồng bộ vị trí/style AttributeReference trên tất cả BlockReference sau khi thay đổi BlockTableRecord.
         /// Thay thế ed.Command("_.ATTSYNC") để giữ mọi thay đổi trong cùng 1 Transaction → 1 lần Ctrl+Z.
+        /// Overload nhận sẵn danh sách refIds để tránh gọi lại GetBlockReferenceIds.
         /// </summary>
-        private static void SyncAttributePositions(Transaction tr, BlockTableRecord btr)
+        private static void SyncAttributePositions(Transaction tr, BlockTableRecord btr, List<ObjectId> refIds = null)
         {
             // Thu thập tất cả AttributeDefinition (non-constant) từ block definition
             var attDefs = new Dictionary<string, AttributeDefinition>(StringComparer.OrdinalIgnoreCase);
@@ -790,9 +801,15 @@ namespace AutoCADBlockTools
             }
             if (attDefs.Count == 0) return;
 
+            // Sử dụng refIds truyền vào nếu có, nếu không thì mới gọi GetBlockReferenceIds
+            IEnumerable<ObjectId> referenceIds;
+            if (refIds != null)
+                referenceIds = refIds;
+            else
+                referenceIds = btr.GetBlockReferenceIds(true, true).Cast<ObjectId>();
+
             // Cập nhật từng BlockReference
-            ObjectIdCollection refIds = btr.GetBlockReferenceIds(true, true);
-            foreach (ObjectId refId in refIds)
+            foreach (ObjectId refId in referenceIds)
             {
                 if (!(tr.GetObject(refId, OpenMode.ForWrite) is BlockReference blockRef)) continue;
 
