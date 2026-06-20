@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <ApplicationPackage SchemaVersion="1.0" AppVersion="1.0.0" Name="Block Utilities Plugin" ProductCode="{179898E2-1EC3-42DA-B55F-39F8F3D141E7}">
-  <CompanyDetails Name="TPL" Url="https://yourwebsite.com" />
+  <CompanyDetails Name="Block Utilities" Url="https://yourwebsite.com" />
   <Components>
     <!-- Khai báo load cho các phiên bản CAD R24.0 (2021) đến R24.3 (2024) -->
     <RuntimeRequirements OS="Win64" Platform="AutoCAD*" SeriesMin="R24.0" SeriesMax="R24.3" />
