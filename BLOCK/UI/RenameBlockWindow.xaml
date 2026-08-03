@@ -36,7 +36,7 @@
 
 					<TextBlock Grid.Column="1" Text="Rename Block (RB)" Foreground="{StaticResource FgBrush}" FontWeight="SemiBold" FontSize="13" VerticalAlignment="Center"/>
 
-					<Button Grid.Column="2" Content="✕" Width="32" Height="26" Margin="0,0,6,0" Style="{StaticResource DangerButton}" Click="BtnCancel_Click" BorderThickness="0" Background="Transparent"/>
+					<Button Grid.Column="2" Content="✕" Width="32" Height="26" Margin="0,0,6,0" Style="{StaticResource DangerButton}" Click="BtnCancel_Click"/>
 				</Grid>
 			</Border>
 
@@ -46,7 +46,7 @@
 					<TextBlock x:Name="txtCurrentName" Text="Current Name: " FontWeight="Bold" Margin="0,0,0,15"/>
 					<TextBlock Text="New Name:" Foreground="{StaticResource LabelBrush}" Margin="0,0,0,4"/>
 					<TextBox x:Name="txtNewName" Margin="0,0,0,15"/>
-					<CheckBox x:Name="chkRandom" Content="Random Name" Checked="ChkRandom_Checked" Unchecked="ChkRandom_Unchecked"/>
+					<CheckBox x:Name="chkRandom" Content="Random Name" Style="{StaticResource DarkCheckBox}" Checked="ChkRandom_Checked" Unchecked="ChkRandom_Unchecked"/>
 				</StackPanel>
 			</Border>
 
