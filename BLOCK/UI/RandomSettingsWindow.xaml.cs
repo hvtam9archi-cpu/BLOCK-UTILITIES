@@ -30,7 +30,9 @@ namespace AutoCADBlockTools.UI
 			if (double.TryParse(txtMinScale.Text, out double minS) &&
 				double.TryParse(txtMaxScale.Text, out double maxS) &&
 				double.TryParse(txtMinAngle.Text, out double minA) &&
-				double.TryParse(txtMaxAngle.Text, out double maxA))
+				double.TryParse(txtMaxAngle.Text, out double maxA) &&
+				IsFinite(minS) && IsFinite(maxS) && minS > 0.0 && maxS > 0.0 &&
+				IsFinite(minA) && IsFinite(maxA))
 			{
 				MinScale = minS;
 				MaxScale = maxS;
@@ -41,8 +43,14 @@ namespace AutoCADBlockTools.UI
 			}
 			else
 			{
-				MessageBox.Show("Please enter valid numeric values.", "Error", MessageBoxButton.OK, MessageBoxImage.Warning);
+				MessageBox.Show("Scale values must be positive finite numbers, and angles must be finite numbers.",
+					"Error", MessageBoxButton.OK, MessageBoxImage.Warning);
 			}
+		}
+
+		private static bool IsFinite(double value)
+		{
+			return !double.IsNaN(value) && !double.IsInfinity(value);
 		}
 
 		private void BtnCancel_Click(object sender, RoutedEventArgs e)

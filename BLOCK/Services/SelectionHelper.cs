@@ -17,7 +17,7 @@ namespace AutoCADBlockTools.Services
 			var blockIds = new System.Collections.Generic.List<ObjectId>(ids.Length);
 			for (int i = 0; i < ids.Length; i++)
 			{
-				if (ids[i].ObjectClass.DxfName == "INSERT")
+				if (ids[i].IsValid && !ids[i].IsErased && ids[i].ObjectClass.DxfName == "INSERT")
 					blockIds.Add(ids[i]);
 			}
 			return blockIds.Count > 0 ? [.. blockIds] : null;

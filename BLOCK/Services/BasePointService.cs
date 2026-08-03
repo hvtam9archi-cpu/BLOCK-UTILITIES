@@ -41,78 +41,79 @@ namespace AutoCADBlockTools.Services
 			}
 			if (targetId == ObjectId.Null) return;
 
-			UndoHelper.Begin(doc);
-
-			using (var docLock = doc.LockDocument())
-			using (var tr = db.TransactionManager.StartTransaction())
+			bool changed = false;
+			try
 			{
-				if (tr.GetObject(targetId, OpenMode.ForRead) is not BlockReference selectedRef) return;
-
-				var btrId = selectedRef.DynamicBlockTableRecord;
-				var btr = (BlockTableRecord)tr.GetObject(btrId, OpenMode.ForRead);
-				Vector3d displacement;
-
-				if (autoCenter)
+				using (var docLock = doc.LockDocument())
+				using (var tr = db.TransactionManager.StartTransaction())
 				{
-					var bounds = BlockHelper.GetBlockBoundingBox(tr, btr);
-					if (!bounds.HasValue) return;
-					var min = bounds.Value.MinPoint;
-					var max = bounds.Value.MaxPoint;
-					var newBasePoint = new Point3d((min.X + max.X) / 2.0, (min.Y + max.Y) / 2.0, (min.Z + max.Z) / 2.0);
-					displacement = btr.Origin - newBasePoint;
-				}
-				else
-				{
-					var ppo = new PromptPointOptions("\nChọn điểm gốc mới: ")
+					if (tr.GetObject(targetId, OpenMode.ForRead) is not BlockReference selectedRef) return;
+
+					var btrId = BlockHelper.GetEffectiveDefinitionId(selectedRef);
+					var btr = (BlockTableRecord)tr.GetObject(btrId, OpenMode.ForRead);
+					Vector3d displacement;
+
+					if (autoCenter)
 					{
-						UseBasePoint = true,
-						BasePoint = selectedRef.Position
-					};
-					var ppr = ed.GetPoint(ppo);
-					if (ppr.Status != PromptStatus.OK) return;
-
-					var matInv = selectedRef.BlockTransform.Inverse();
-					var pointInBlockSpace = ppr.Value.TransformBy(matInv);
-					displacement = btr.Origin - pointInBlockSpace;
-				}
-
-				if (displacement.Length < Tolerance.Global.EqualVector) return;
-
-				btr.UpgradeOpen();
-				var transformMatrix = Matrix3d.Displacement(displacement);
-				foreach (ObjectId id in btr)
-				{
-					if (tr.GetObject(id, OpenMode.ForWrite) is Entity ent)
-						ent.TransformBy(transformMatrix);
-				}
-
-				var refIds = BlockHelper.GetBlockReferenceIdsAll(btr, tr);
-				foreach (ObjectId refId in refIds)
-				{
-					if (tr.GetObject(refId, OpenMode.ForWrite) is BlockReference br)
-					{
-						if (retainRefPosition)
-						{
-							var adjustment = displacement.Negate().TransformBy(br.BlockTransform);
-							br.Position = br.Position.Add(adjustment);
-						}
-						br.RecordGraphicsModified(true);
+						var bounds = BlockHelper.GetBlockBoundingBox(tr, btr);
+						if (!bounds.HasValue) return;
+						var min = bounds.Value.MinPoint;
+						var max = bounds.Value.MaxPoint;
+						var newBasePoint = new Point3d((min.X + max.X) / 2.0, (min.Y + max.Y) / 2.0, (min.Z + max.Z) / 2.0);
+						displacement = btr.Origin - newBasePoint;
 					}
+					else
+					{
+						var ppo = new PromptPointOptions("\nChọn điểm gốc mới: ")
+						{
+							UseBasePoint = true,
+							BasePoint = selectedRef.Position
+						};
+						var ppr = ed.GetPoint(ppo);
+						if (ppr.Status != PromptStatus.OK) return;
+
+						var matInv = selectedRef.BlockTransform.Inverse();
+						var pointInBlockSpace = ppr.Value.TransformBy(matInv);
+						displacement = btr.Origin - pointInBlockSpace;
+					}
+
+					if (displacement.Length < Tolerance.Global.EqualVector) return;
+
+					var transformMatrix = Matrix3d.Displacement(displacement);
+					foreach (ObjectId id in btr)
+					{
+						if (tr.GetObject(id, OpenMode.ForWrite) is Entity ent)
+							ent.TransformBy(transformMatrix);
+					}
+
+					var refIds = BlockHelper.GetBlockReferenceIdsAll(btr, tr);
+					foreach (ObjectId refId in refIds)
+					{
+						if (tr.GetObject(refId, OpenMode.ForWrite) is BlockReference br)
+						{
+							if (retainRefPosition)
+							{
+								var adjustment = displacement.Negate().TransformBy(br.BlockTransform);
+								br.Position = br.Position.Add(adjustment);
+							}
+							br.RecordGraphicsModified(true);
+						}
+					}
+
+					if (btr.HasAttributeDefinitions)
+						AttributeSyncHelper.Sync(tr, btr, refIds);
+
+					tr.Commit();
+					changed = true;
+					db.TransactionManager.QueueForGraphicsFlush();
 				}
-
-				if (btr.HasAttributeDefinitions)
-					AttributeSyncHelper.Sync(tr, btr, refIds);
-
-				tr.Commit();
-				db.TransactionManager.QueueForGraphicsFlush();
 			}
-
-			ed.UpdateScreen();
-
-			if (wasPreSelected && targetId != ObjectId.Null && !targetId.IsErased)
-				ed.SetImpliedSelection([targetId]);
-
-			UndoHelper.End(doc);
+			finally
+			{
+				if (changed) ed.UpdateScreen();
+				if (wasPreSelected && targetId.IsValid && !targetId.IsErased)
+					ed.SetImpliedSelection([targetId]);
+			}
 		}
 
 		#endregion
@@ -156,10 +157,11 @@ namespace AutoCADBlockTools.Services
 				if (tr.GetObject(so.ObjectId, OpenMode.ForRead) is Entity ent)
 				{
 					idsToBlock.Add(so.ObjectId);
-					if (ent.Bounds.HasValue)
+					Extents3d? bounds = ent.Bounds;
+					if (bounds.HasValue)
 					{
-						if (first) { totalExtents = ent.Bounds.Value; first = false; }
-						else { totalExtents.AddExtents(ent.Bounds.Value); }
+						if (first) { totalExtents = bounds.Value; first = false; }
+						else { totalExtents.AddExtents(bounds.Value); }
 					}
 				}
 			}
@@ -172,12 +174,10 @@ namespace AutoCADBlockTools.Services
 
 			// Dùng Guid thay DateTime.Ticks
 			string blockName;
-			int nameAttempt = 0;
 			do
 			{
 				blockName = BlockHelper.GenerateUniqueName("@");
-				nameAttempt++;
-			} while (bt.Has(blockName) && nameAttempt < 100);
+			} while (bt.Has(blockName));
 
 			var newBtr = new BlockTableRecord { Name = blockName, Origin = center };
 			bt.Add(newBtr);
@@ -185,6 +185,7 @@ namespace AutoCADBlockTools.Services
 
 			var mapping = new IdMapping();
 			db.DeepCloneObjects(idsToBlock, newBtr.ObjectId, mapping, false);
+			BlockHelper.MoveHatchesToBack(tr, newBtr);
 
 			foreach (ObjectId id in idsToBlock)
 			{
@@ -214,29 +215,28 @@ namespace AutoCADBlockTools.Services
 
 			ObjectId[] selectedIds = ss.GetObjectIds();
 
-			// Thu thập blockName → representative BlockReference
-			var blockNameToRefId = new Dictionary<string, ObjectId>();
+			// Map each block definition to one representative reference.
+			var definitionToRefId = new Dictionary<ObjectId, ObjectId>();
 			using (var tr = doc.TransactionManager.StartTransaction())
 			{
 				foreach (SelectedObject so in ss)
 				{
 					if (tr.GetObject(so.ObjectId, OpenMode.ForRead) is BlockReference br)
 					{
-						string name = BlockHelper.GetEffectiveName(br, tr);
-						if (!blockNameToRefId.ContainsKey(name))
-							blockNameToRefId[name] = so.ObjectId;
+						ObjectId definitionId = BlockHelper.GetEffectiveDefinitionId(br);
+						if (!definitionToRefId.ContainsKey(definitionId))
+							definitionToRefId[definitionId] = so.ObjectId;
 					}
 				}
 				tr.Commit();
 			}
-			if (blockNameToRefId.Count == 0) return;
-
-			UndoHelper.Begin(doc);
+			if (definitionToRefId.Count == 0) return;
 
 			var window = new JbpWindow(settings.LastJustification, settings.RetainVisualPosition);
 			if (Application.ShowModalWindow(window) != true)
 			{
 				Logger.Info("*Cancel*");
+				RestoreSelection(ed, selectedIds);
 				return;
 			}
 
@@ -246,17 +246,15 @@ namespace AutoCADBlockTools.Services
 			using (var docLock = doc.LockDocument())
 			using (var tr = doc.TransactionManager.StartTransaction())
 			{
-				var bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
 				var ucsMatrix = ed.CurrentUserCoordinateSystem;
 				var wcsToUcs = ucsMatrix.Inverse();
+				int updatedCount = 0;
 
-				foreach (var kvp in blockNameToRefId)
+				foreach (var kvp in definitionToRefId)
 				{
-					string blkName = kvp.Key;
+					ObjectId btrId = kvp.Key;
 					ObjectId representativeRefId = kvp.Value;
 
-					if (!bt.Has(blkName)) continue;
-					var btrId = bt[blkName];
 					var btr = (BlockTableRecord)tr.GetObject(btrId, OpenMode.ForRead);
 
 					var bounds = BlockHelper.GetBlockBoundingBox(tr, btr);
@@ -304,11 +302,11 @@ namespace AutoCADBlockTools.Services
 
 					if (displacement.Length > 1e-8)
 					{
-						btr.UpgradeOpen();
+						var displacementMatrix = Matrix3d.Displacement(displacement);
 						foreach (ObjectId entId in btr)
 						{
 							if (tr.GetObject(entId, OpenMode.ForWrite) is Entity ent)
-								ent.TransformBy(Matrix3d.Displacement(displacement));
+								ent.TransformBy(displacementMatrix);
 						}
 
 						var refIds = BlockHelper.GetBlockReferenceIdsAll(btr, tr);
@@ -327,24 +325,26 @@ namespace AutoCADBlockTools.Services
 
 						if (btr.HasAttributeDefinitions)
 							AttributeSyncHelper.Sync(tr, btr, refIds);
+
+						updatedCount++;
 					}
 				}
 				tr.Commit();
 				db.TransactionManager.QueueForGraphicsFlush();
+				Logger.Info($"Đã cập nhật Base Point cho {updatedCount} loại Block.");
 			}
 
 			ed.UpdateScreen();
-			Logger.Info($"Đã cập nhật Base Point cho {blockNameToRefId.Count} loại Block.");
+			RestoreSelection(ed, selectedIds);
+		}
 
-			// Re-select SAU KHI graphics đã refresh
-			if (selectedIds != null && selectedIds.Length > 0)
-			{
-				var validIds = selectedIds.Where(id => id.IsValid && !id.IsErased).ToArray();
-				if (validIds.Length > 0)
-					ed.SetImpliedSelection(validIds);
-			}
+		private static void RestoreSelection(Editor ed, ObjectId[] selectedIds)
+		{
+			if (selectedIds == null || selectedIds.Length == 0) return;
 
-			UndoHelper.End(doc);
+			var validIds = selectedIds.Where(id => id.IsValid && !id.IsErased).ToArray();
+			if (validIds.Length > 0)
+				ed.SetImpliedSelection(validIds);
 		}
 
 		private static Point3d CalculatePoint(Extents3d ext, Justification jus)

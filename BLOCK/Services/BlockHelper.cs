@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using Autodesk.AutoCAD.DatabaseServices;
 
 namespace AutoCADBlockTools.Services
@@ -10,6 +9,15 @@ namespace AutoCADBlockTools.Services
 	/// </summary>
 	public static class BlockHelper
 	{
+		/// <summary>
+		/// Returns the source definition for both regular and dynamic block references.
+		/// </summary>
+		public static ObjectId GetEffectiveDefinitionId(BlockReference br)
+		{
+			if (br == null) throw new ArgumentNullException(nameof(br));
+			return br.IsDynamicBlock ? br.DynamicBlockTableRecord : br.BlockTableRecord;
+		}
+
 		/// <summary>
 		/// Lấy Effective Name cho Dynamic Block, nếu không thì trả về Name thường.
 		/// </summary>
@@ -29,24 +37,31 @@ namespace AutoCADBlockTools.Services
 		public static List<ObjectId> GetBlockReferenceIdsAll(BlockTableRecord btr, Transaction tr)
 		{
 			ObjectIdCollection directIds = btr.GetBlockReferenceIds(true, true);
+			var ids = new List<ObjectId>(directIds.Count);
+
+			foreach (ObjectId id in directIds)
+				ids.Add(id);
 
 			// Fast path: không phải Dynamic Block
 			if (!btr.IsDynamicBlock)
 			{
-				return [.. directIds.Cast<ObjectId>()];
+				return ids;
 			}
 
 			// Dynamic block: bao gồm cả anonymous block references
+			var seen = new HashSet<ObjectId>(ids);
 			ObjectIdCollection anonBtrIds = btr.GetAnonymousBlockIds();
-			var ids = new List<ObjectId>(directIds.Count + anonBtrIds.Count * 4);
-			foreach (ObjectId id in directIds) ids.Add(id);
+			if (anonBtrIds.Count > 0)
+				ids.Capacity = directIds.Count + (anonBtrIds.Count * 4);
 
 			foreach (ObjectId anonBtrId in anonBtrIds)
 			{
 				if (tr.GetObject(anonBtrId, OpenMode.ForRead) is BlockTableRecord anonBtr)
 				{
 					foreach (ObjectId refId in anonBtr.GetBlockReferenceIds(true, true))
-						ids.Add(refId);
+					{
+						if (seen.Add(refId)) ids.Add(refId);
+					}
 				}
 			}
 			return ids;
@@ -65,17 +80,18 @@ namespace AutoCADBlockTools.Services
 
 				try
 				{
-					if (ent.Bounds.HasValue)
+					Extents3d? bounds = ent.Bounds;
+					if (bounds.HasValue)
 					{
 						if (totalExtents.HasValue)
 						{
 							var tmp = totalExtents.Value;
-							tmp.AddExtents(ent.Bounds.Value);
+							tmp.AddExtents(bounds.Value);
 							totalExtents = tmp;
 						}
 						else
 						{
-							totalExtents = ent.Bounds.Value;
+							totalExtents = bounds.Value;
 						}
 					}
 				}
@@ -85,10 +101,31 @@ namespace AutoCADBlockTools.Services
 		}
 
 		/// <summary>
+		/// Moves every hatch directly owned by a block definition behind its other entities.
+		/// </summary>
+		public static void MoveHatchesToBack(Transaction tr, BlockTableRecord btr)
+		{
+			if (tr is null) throw new ArgumentNullException(nameof(tr));
+			if (btr is null) throw new ArgumentNullException(nameof(btr));
+
+			var hatchIds = new ObjectIdCollection();
+			foreach (ObjectId entityId in btr)
+			{
+				if (tr.GetObject(entityId, OpenMode.ForRead) is Hatch)
+					hatchIds.Add(entityId);
+			}
+
+			if (hatchIds.Count == 0 || btr.DrawOrderTableId.IsNull) return;
+
+			var drawOrder = (DrawOrderTable)tr.GetObject(btr.DrawOrderTableId, OpenMode.ForWrite);
+			drawOrder.MoveToBottom(hatchIds);
+		}
+
+		/// <summary>
 		/// Clone block definition với tên mới.
 		/// </summary>
 		public static BlockTableRecord CloneBlockDefinition(Transaction tr, Database db, BlockTable bt,
-			string _originalName, string newName, ObjectId originalBtrId)
+			string newName, ObjectId originalBtrId)
 		{
 			if (tr is null)
 			{
@@ -103,11 +140,6 @@ namespace AutoCADBlockTools.Services
 			if (bt is null)
 			{
 				throw new ArgumentNullException(nameof(bt));
-			}
-
-			if (string.IsNullOrEmpty(_originalName))
-			{
-				throw new ArgumentException($"'{nameof(_originalName)}' cannot be null or empty.", nameof(_originalName));
 			}
 
 			if (string.IsNullOrEmpty(newName))
@@ -127,6 +159,7 @@ namespace AutoCADBlockTools.Services
 			var idsToCopy = new ObjectIdCollection([.. originalBtr]);
 			var map = new IdMapping();
 			db.DeepCloneObjects(idsToCopy, newBtr.ObjectId, map, false);
+			MoveHatchesToBack(tr, newBtr);
 
 			return newBtr;
 		}

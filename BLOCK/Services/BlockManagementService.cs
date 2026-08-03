@@ -29,8 +29,7 @@ namespace AutoCADBlockTools.Services
 			// Mode 1: Xóa theo Selection (1 transaction = 1 Ctrl+Z)
 			if (ss != null && ss.Count > 0)
 			{
-				UndoHelper.Begin(doc);
-				var blocksToDelete = new HashSet<string>();
+				var blocksToDelete = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 				using var docLock = doc.LockDocument();
 				using var tr = db.TransactionManager.StartTransaction();
 				foreach (SelectedObject so in ss)
@@ -45,7 +44,7 @@ namespace AutoCADBlockTools.Services
 			}
 
 			// Mode 2: Xóa tương tác — thu thập tên, xóa 1 lần
-			var collectedNames = new HashSet<string>();
+			var collectedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 			while (true)
 			{
 				var peo = new PromptEntityOptions("\nChọn Block để xóa [Name/Exit] <Exit>: ") { AllowNone = true };
@@ -111,29 +110,42 @@ namespace AutoCADBlockTools.Services
 
 			var btrId = bt[blockName];
 			var btr = (BlockTableRecord)tr.GetObject(btrId, OpenMode.ForRead);
-			var refIds = btr.GetBlockReferenceIds(true, true);
+			var refIds = BlockHelper.GetBlockReferenceIdsAll(btr, tr);
 
 			int count = 0;
 			foreach (ObjectId refId in refIds)
 			{
+				if (!refId.IsValid || refId.IsErased) continue;
 				var obj = tr.GetObject(refId, OpenMode.ForWrite);
 				if (!obj.IsErased) { obj.Erase(); count++; }
 			}
 
-			try
+			var purgeIds = new ObjectIdCollection([btrId]);
+			if (btr.IsDynamicBlock)
 			{
-				if (count == refIds.Count)
-				{
-					btr.UpgradeOpen();
-					btr.Erase();
-					Logger.Info($"Đã xóa {count} đối tượng và Purge định nghĩa Block '{blockName}'.");
-				}
-				else
-					Logger.Info($"Đã xóa {count} đối tượng Block '{blockName}'.");
+				foreach (ObjectId anonymousBtrId in btr.GetAnonymousBlockIds())
+					purgeIds.Add(anonymousBtrId);
 			}
-			catch
+
+			db.Purge(purgeIds);
+			bool definitionPurged = false;
+			foreach (ObjectId purgeId in purgeIds)
 			{
-				Logger.Info($"Đã xóa {count} đối tượng Block '{blockName}'.");
+				if (!purgeId.IsValid || purgeId.IsErased) continue;
+				if (tr.GetObject(purgeId, OpenMode.ForWrite) is BlockTableRecord purgeableBtr)
+				{
+					purgeableBtr.Erase();
+					if (purgeId == btrId) definitionPurged = true;
+				}
+			}
+
+			if (definitionPurged)
+			{
+				Logger.Info($"Đã xóa {count} đối tượng và Purge định nghĩa Block '{blockName}'.");
+			}
+			else
+			{
+				Logger.Info($"Đã xóa {count} đối tượng Block '{blockName}'; định nghĩa vẫn còn phụ thuộc nên chưa thể Purge.");
 			}
 		}
 
@@ -165,7 +177,7 @@ namespace AutoCADBlockTools.Services
 			foreach (SelectedObject so in ss)
 			{
 				if (tr.GetObject(so.ObjectId, OpenMode.ForRead) is BlockReference br)
-					selectedBlockDefinitions.Add(br.DynamicBlockTableRecord);
+					selectedBlockDefinitions.Add(BlockHelper.GetEffectiveDefinitionId(br));
 			}
 
 			foreach (ObjectId btrId in selectedBlockDefinitions)
@@ -173,8 +185,8 @@ namespace AutoCADBlockTools.Services
 				ProcessBlockDefinition(tr, btrId, processedBtrs, currentBatchBackup);
 			}
 
-			if (currentBatchBackup.Count > 0) _undoStack.Push(currentBatchBackup);
 			tr.Commit();
+			if (currentBatchBackup.Count > 0) _undoStack.Push(currentBatchBackup);
 			db.TransactionManager.QueueForGraphicsFlush();
 			Logger.Info($"Đã cập nhật Layer 0 cho {processedBtrs.Count} loại Block.");
 		}
@@ -182,27 +194,28 @@ namespace AutoCADBlockTools.Services
 		private static void ProcessBlockDefinition(Transaction tr, ObjectId btrId,
 			HashSet<ObjectId> processed, List<EntityBackupState> currentBatch)
 		{
-			if (processed.Contains(btrId)) return;
-			processed.Add(btrId);
+			if (!processed.Add(btrId)) return;
 
 			if (tr.GetObject(btrId, OpenMode.ForRead) is BlockTableRecord btr)
 			{
-				btr.UpgradeOpen();
 				foreach (ObjectId id in btr)
 				{
-					if (tr.GetObject(id, OpenMode.ForWrite) is Entity ent)
+					if (tr.GetObject(id, OpenMode.ForRead) is Entity ent)
 					{
+						if (ent is BlockReference subBr)
+							ProcessBlockDefinition(tr, BlockHelper.GetEffectiveDefinitionId(subBr), processed, currentBatch);
+
+						if (ent.Layer == "0" && ent.ColorIndex == 256) continue;
+
 						currentBatch.Add(new EntityBackupState
 						{
 							EntityId = id,
 							OldLayer = ent.Layer,
 							OldColor = ent.Color
 						});
+						ent.UpgradeOpen();
 						ent.Layer = "0";
 						ent.Color = Color.FromColorIndex(ColorMethod.ByLayer, 256);
-
-						if (ent is BlockReference subBr)
-							ProcessBlockDefinition(tr, subBr.DynamicBlockTableRecord, processed, currentBatch);
 					}
 				}
 			}
@@ -225,7 +238,7 @@ namespace AutoCADBlockTools.Services
 				return;
 			}
 
-			var lastBatch = _undoStack.Pop();
+			var lastBatch = _undoStack.Peek();
 			using var docLock = doc.LockDocument();
 			using var tr = db.TransactionManager.StartTransaction();
 			int count = 0;
@@ -249,6 +262,7 @@ namespace AutoCADBlockTools.Services
 				}
 			}
 			tr.Commit();
+			_undoStack.Pop();
 			db.TransactionManager.QueueForGraphicsFlush();
 			Logger.Info($"Đã hoàn tác (UDLB) cho {count} đối tượng.");
 		}
@@ -269,38 +283,43 @@ namespace AutoCADBlockTools.Services
 			using var docLock = doc.LockDocument();
 			using var tr = db.TransactionManager.StartTransaction();
 			var bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForWrite);
-			var groups = new Dictionary<string, List<BlockReference>>();
+			var groups = new Dictionary<ObjectId, List<BlockReference>>();
 
 			foreach (SelectedObject so in ss)
 			{
-				if (tr.GetObject(so.ObjectId, OpenMode.ForWrite) is BlockReference br)
+				if (tr.GetObject(so.ObjectId, OpenMode.ForRead) is BlockReference br)
 				{
-					string effectiveName = BlockHelper.GetEffectiveName(br, tr);
-					if (!groups.ContainsKey(effectiveName))
-						groups[effectiveName] = [];
-					groups[effectiveName].Add(br);
+					ObjectId definitionId = BlockHelper.GetEffectiveDefinitionId(br);
+					if (!groups.TryGetValue(definitionId, out var references))
+					{
+						references = [];
+						groups[definitionId] = references;
+					}
+					references.Add(br);
 				}
 			}
 
 			foreach (var entry in groups)
 			{
-				string originalName = entry.Key;
+				ObjectId originalBtrId = entry.Key;
 				var refsToUpdate = entry.Value;
-				var originalBtrId = refsToUpdate[0].DynamicBlockTableRecord;
+				var originalBtr = (BlockTableRecord)tr.GetObject(originalBtrId, OpenMode.ForRead);
+				string originalName = originalBtr.Name;
 
 				// Dùng Guid thay DateTime.Ticks để tạo tên duy nhất
 				string newName;
-				int attempt = 0;
 				do
 				{
 					newName = $"{originalName}_{BlockHelper.GenerateUniqueName("")}";
-					attempt++;
-				} while (bt.Has(newName) && attempt < 100);
+				} while (bt.Has(newName));
 
-				BlockHelper.CloneBlockDefinition(tr, db, bt, originalName, newName, originalBtrId);
+				var newBtr = BlockHelper.CloneBlockDefinition(tr, db, bt, newName, originalBtrId);
 
 				foreach (BlockReference br in refsToUpdate)
-					br.BlockTableRecord = bt[newName];
+				{
+					br.UpgradeOpen();
+					br.BlockTableRecord = newBtr.ObjectId;
+				}
 
 				Logger.Info($"Đã tách nhóm {refsToUpdate.Count} đối tượng thành '{newName}'");
 			}

@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using Autodesk.AutoCAD.DatabaseServices;
 
 namespace AutoCADBlockTools.Services
@@ -27,11 +26,11 @@ namespace AutoCADBlockTools.Services
 			if (attDefs.Count == 0) return;
 
 			// Sử dụng refIds được truyền vào nếu có
-			IEnumerable<ObjectId> referenceIds = refIds ?? btr.GetBlockReferenceIds(true, true).Cast<ObjectId>();
+			IEnumerable<ObjectId> referenceIds = refIds ?? BlockHelper.GetBlockReferenceIdsAll(btr, tr);
 
 			foreach (ObjectId refId in referenceIds)
 			{
-				if (tr.GetObject(refId, OpenMode.ForWrite) is not BlockReference blockRef) continue;
+				if (tr.GetObject(refId, OpenMode.ForRead) is not BlockReference blockRef) continue;
 
 				// Map tag → ObjectId của AttributeReference hiện có
 				var existingAtts = new Dictionary<string, ObjectId>(StringComparer.OrdinalIgnoreCase);
@@ -56,6 +55,7 @@ namespace AutoCADBlockTools.Services
 					}
 					else
 					{
+						if (!blockRef.IsWriteEnabled) blockRef.UpgradeOpen();
 						var newAttRef = new AttributeReference();
 						newAttRef.SetAttributeFromBlock(kvp.Value, blockRef.BlockTransform);
 						newAttRef.TextString = kvp.Value.TextString;

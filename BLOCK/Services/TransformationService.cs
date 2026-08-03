@@ -79,8 +79,15 @@ namespace AutoCADBlockTools.Services
 			{
 				try
 				{
-					if (tr.GetObject(so.ObjectId, OpenMode.ForWrite) is BlockReference br)
+					if (tr.GetObject(so.ObjectId, OpenMode.ForRead) is BlockReference br)
 					{
+						if (Math.Abs(br.Rotation) < Tolerance.Global.EqualPoint &&
+							Math.Abs(br.ScaleFactors.X - 1.0) < Tolerance.Global.EqualPoint &&
+							Math.Abs(br.ScaleFactors.Y - 1.0) < Tolerance.Global.EqualPoint &&
+							Math.Abs(br.ScaleFactors.Z - 1.0) < Tolerance.Global.EqualPoint)
+							continue;
+
+						br.UpgradeOpen();
 						br.Rotation = 0.0;
 						br.ScaleFactors = new Scale3d(1.0, 1.0, 1.0);
 						count++;

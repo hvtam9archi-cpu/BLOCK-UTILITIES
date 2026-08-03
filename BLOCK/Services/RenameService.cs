@@ -36,14 +36,14 @@ namespace AutoCADBlockTools.Services
 			}
 			if (targetId == ObjectId.Null) return;
 
-			using var docLock = doc.LockDocument();
-			using var tr = db.TransactionManager.StartTransaction();
 			try
 			{
-				var br = tr.GetObject(targetId, OpenMode.ForRead) as BlockReference;
-				if (br == null) return;
-
-				string currentName = BlockHelper.GetEffectiveName(br, tr);
+				string currentName;
+				using (var readTr = db.TransactionManager.StartOpenCloseTransaction())
+				{
+					if (readTr.GetObject(targetId, OpenMode.ForRead) is not BlockReference br) return;
+					currentName = BlockHelper.GetEffectiveName(br, readTr);
+				}
 
 				var window = new RenameBlockWindow(currentName);
 				if (Application.ShowModalWindow(window) != true) return;
@@ -51,14 +51,17 @@ namespace AutoCADBlockTools.Services
 				string newName = window.ResultName;
 				if (newName.Equals(currentName, StringComparison.OrdinalIgnoreCase)) return;
 
-				var bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForWrite);
+				using var docLock = doc.LockDocument();
+				using var tr = db.TransactionManager.StartTransaction();
+				var bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
 				if (bt.Has(newName))
 				{
 					Logger.Error($"Tên Block '{newName}' đã tồn tại trong bản vẽ!");
 					return;
 				}
 
-				var btrId = br.DynamicBlockTableRecord;
+				if (tr.GetObject(targetId, OpenMode.ForRead) is not BlockReference targetRef) return;
+				var btrId = BlockHelper.GetEffectiveDefinitionId(targetRef);
 				var btr = (BlockTableRecord)tr.GetObject(btrId, OpenMode.ForWrite);
 				btr.Name = newName;
 
