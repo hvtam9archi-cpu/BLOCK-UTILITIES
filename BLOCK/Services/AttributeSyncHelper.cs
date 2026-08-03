@@ -57,10 +57,18 @@ namespace AutoCADBlockTools.Services
 					{
 						if (!blockRef.IsWriteEnabled) blockRef.UpgradeOpen();
 						var newAttRef = new AttributeReference();
-						newAttRef.SetAttributeFromBlock(kvp.Value, blockRef.BlockTransform);
-						newAttRef.TextString = kvp.Value.TextString;
-						blockRef.AttributeCollection.AppendAttribute(newAttRef);
-						tr.AddNewlyCreatedDBObject(newAttRef, true);
+						try
+						{
+							newAttRef.SetAttributeFromBlock(kvp.Value, blockRef.BlockTransform);
+							newAttRef.TextString = kvp.Value.TextString;
+							blockRef.AttributeCollection.AppendAttribute(newAttRef);
+							tr.AddNewlyCreatedDBObject(newAttRef, true);
+						}
+						catch (System.Exception)
+						{
+							if (newAttRef.ObjectId.IsNull) newAttRef.Dispose();
+							throw;
+						}
 					}
 				}
 

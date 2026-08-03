@@ -34,26 +34,19 @@ namespace AutoCADBlockTools.Services
 
 			foreach (SelectedObject so in ss)
 			{
-				try
+				if (tr.GetObject(so.ObjectId, OpenMode.ForWrite) is BlockReference br)
 				{
-					if (tr.GetObject(so.ObjectId, OpenMode.ForWrite) is BlockReference br)
+					if (doScale)
 					{
-						if (doScale)
-						{
-							double scaleFactor = Math.Round(settings.MinScale + (_random.NextDouble() * scaleRange), 3);
-							br.ScaleFactors = new Scale3d(scaleFactor, scaleFactor, scaleFactor);
-						}
-						if (doRotate)
-						{
-							double angleDeg = settings.MinRotate + (_random.NextDouble() * rotRange);
-							br.Rotation = angleDeg * Math.PI / 180.0;
-						}
-						count++;
+						double scaleFactor = Math.Round(settings.MinScale + (_random.NextDouble() * scaleRange), 3);
+						br.ScaleFactors = new Scale3d(scaleFactor, scaleFactor, scaleFactor);
 					}
-				}
-				catch (Exception ex)
-				{
-					Logger.Warning($"Transform: {ex.Message}");
+					if (doRotate)
+					{
+						double angleDeg = settings.MinRotate + (_random.NextDouble() * rotRange);
+						br.Rotation = angleDeg * Math.PI / 180.0;
+					}
+					count++;
 				}
 			}
 			tr.Commit();
@@ -77,25 +70,18 @@ namespace AutoCADBlockTools.Services
 			int count = 0;
 			foreach (SelectedObject so in ss)
 			{
-				try
+				if (tr.GetObject(so.ObjectId, OpenMode.ForRead) is BlockReference br)
 				{
-					if (tr.GetObject(so.ObjectId, OpenMode.ForRead) is BlockReference br)
-					{
-						if (Math.Abs(br.Rotation) < Tolerance.Global.EqualPoint &&
-							Math.Abs(br.ScaleFactors.X - 1.0) < Tolerance.Global.EqualPoint &&
-							Math.Abs(br.ScaleFactors.Y - 1.0) < Tolerance.Global.EqualPoint &&
-							Math.Abs(br.ScaleFactors.Z - 1.0) < Tolerance.Global.EqualPoint)
-							continue;
+					if (Math.Abs(br.Rotation) < Tolerance.Global.EqualPoint &&
+						Math.Abs(br.ScaleFactors.X - 1.0) < Tolerance.Global.EqualPoint &&
+						Math.Abs(br.ScaleFactors.Y - 1.0) < Tolerance.Global.EqualPoint &&
+						Math.Abs(br.ScaleFactors.Z - 1.0) < Tolerance.Global.EqualPoint)
+						continue;
 
-						br.UpgradeOpen();
-						br.Rotation = 0.0;
-						br.ScaleFactors = new Scale3d(1.0, 1.0, 1.0);
-						count++;
-					}
-				}
-				catch (Exception ex)
-				{
-					Logger.Warning($"Reset: {ex.Message}");
+					br.UpgradeOpen();
+					br.Rotation = 0.0;
+					br.ScaleFactors = new Scale3d(1.0, 1.0, 1.0);
+					count++;
 				}
 			}
 			tr.Commit();

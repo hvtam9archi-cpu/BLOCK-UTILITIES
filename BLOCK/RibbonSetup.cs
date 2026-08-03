@@ -1,8 +1,12 @@
 using System;
 using System.Windows.Input;
+using AutoCADBlockTools.Services;
+using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.Runtime;
 using Autodesk.Windows;
 using Application = Autodesk.AutoCAD.ApplicationServices.Application;
+
+[assembly: ExtensionApplication(typeof(AutoCADBlockTools.RibbonSetup))]
 
 namespace AutoCADBlockTools
 {
@@ -10,34 +14,89 @@ namespace AutoCADBlockTools
 	{
 		private const string TabId = "TH_TOOLS_TAB";
 		private const string TabTitle = "TH Tools";
+		private const string PanelId = "TPL_BLOCK_PANEL";
 		private readonly RibbonCommandHandler _cmdHandler = new();
 
 		public void Initialize()
 		{
-			Application.Idle += Application_Idle;
-			Application.SystemVariableChanged += Application_SystemVariableChanged;
+			try
+			{
+				Application.Idle += Application_Idle;
+				Application.SystemVariableChanged += Application_SystemVariableChanged;
+				Application.DocumentManager.DocumentToBeDestroyed += DocumentManager_DocumentToBeDestroyed;
+			}
+			catch (System.Exception ex)
+			{
+				Application.Idle -= Application_Idle;
+				Application.SystemVariableChanged -= Application_SystemVariableChanged;
+				Application.DocumentManager.DocumentToBeDestroyed -= DocumentManager_DocumentToBeDestroyed;
+				Logger.Error("RibbonSetup.Initialize", ex);
+			}
 		}
 
 		public void Terminate()
 		{
-			Application.Idle -= Application_Idle;
-			Application.SystemVariableChanged -= Application_SystemVariableChanged;
+			try
+			{
+				Application.Idle -= Application_Idle;
+				Application.SystemVariableChanged -= Application_SystemVariableChanged;
+				Application.DocumentManager.DocumentToBeDestroyed -= DocumentManager_DocumentToBeDestroyed;
+			}
+			catch (System.Exception ex)
+			{
+				Logger.Error("RibbonSetup.Terminate", ex);
+			}
+			finally
+			{
+				try
+				{
+					BlockManagementService.ClearUndoState();
+				}
+				catch (System.Exception ex)
+				{
+					Logger.Error("RibbonSetup.Terminate cleanup", ex);
+				}
+			}
 		}
 
 		private void Application_Idle(object sender, EventArgs e)
 		{
-			if (ComponentManager.Ribbon != null)
+			try
+			{
+				if (ComponentManager.Ribbon == null) return;
+
+				CreateRibbon();
+				Application.Idle -= Application_Idle;
+			}
+			catch (System.Exception ex)
 			{
 				Application.Idle -= Application_Idle;
-				CreateRibbon();
+				Logger.Error("RibbonSetup.Application_Idle", ex);
 			}
 		}
 
-		private void Application_SystemVariableChanged(object sender, Autodesk.AutoCAD.ApplicationServices.SystemVariableChangedEventArgs e)
+		private void Application_SystemVariableChanged(object sender, SystemVariableChangedEventArgs e)
 		{
-			if (e.Name.Equals("WSCURRENT", StringComparison.OrdinalIgnoreCase) && ComponentManager.Ribbon != null)
+			try
 			{
-				CreateRibbon();
+				if (e.Name.Equals("WSCURRENT", StringComparison.OrdinalIgnoreCase) && ComponentManager.Ribbon != null)
+					CreateRibbon();
+			}
+			catch (System.Exception ex)
+			{
+				Logger.Error("RibbonSetup.Application_SystemVariableChanged", ex);
+			}
+		}
+
+		private void DocumentManager_DocumentToBeDestroyed(object sender, DocumentCollectionEventArgs e)
+		{
+			try
+			{
+				BlockManagementService.ClearUndoState(e.Document.Database);
+			}
+			catch (System.Exception ex)
+			{
+				Logger.Error("RibbonSetup.DocumentToBeDestroyed", ex);
 			}
 		}
 
@@ -56,11 +115,10 @@ namespace AutoCADBlockTools
 			}
 
 			// 2. Tìm hoặc Tạo Panel duy nhất "Block Utilities"
-			string panelId = "TPL_BLOCK_PANEL";
 			bool panelExists = false;
 			foreach (RibbonPanel p in rtb.Panels)
 			{
-				if (p.Source.Id == panelId)
+				if (p.Source.Id == PanelId)
 				{
 					panelExists = true;
 					break;
@@ -69,7 +127,7 @@ namespace AutoCADBlockTools
 
 			if (!panelExists)
 			{
-				RibbonPanelSource rps = new() { Title = "Block Utilities", Id = panelId };
+				RibbonPanelSource rps = new() { Title = "Block Utilities", Id = PanelId };
 				RibbonPanel rp = new() { Source = rps };
 
 				// --- Nhóm 1: Transformation ---
@@ -172,6 +230,7 @@ namespace AutoCADBlockTools
 
 			System.Windows.Media.Imaging.RenderTargetBitmap rtb = new(16, 16, 96, 96, System.Windows.Media.PixelFormats.Pbgra32);
 			rtb.Render(visual);
+			rtb.Freeze();
 			return rtb;
 		}
 	}
@@ -185,16 +244,24 @@ namespace AutoCADBlockTools
 
 		public void Execute(object parameter)
 		{
-			string cmd = null;
-			if (parameter is RibbonButton btn)
-				cmd = btn.CommandParameter as string;
-			else if (parameter is string s)
-				cmd = s;
-
-			if (!string.IsNullOrEmpty(cmd))
+			try
 			{
-				Autodesk.AutoCAD.ApplicationServices.Document doc = Application.DocumentManager.MdiActiveDocument;
-				doc?.SendStringToExecute(cmd, true, false, true);
+				string cmd = null;
+				if (parameter is RibbonButton btn)
+					cmd = btn.CommandParameter as string;
+				else if (parameter is string s)
+					cmd = s;
+
+				if (!string.IsNullOrEmpty(cmd))
+				{
+					Document doc = Application.DocumentManager.MdiActiveDocument;
+					// Ribbon callbacks run outside command context; queuing the registered command is intentional.
+					doc?.SendStringToExecute(cmd, true, false, true);
+				}
+			}
+			catch (System.Exception ex)
+			{
+				Logger.Error("RibbonCommandHandler.Execute", ex);
 			}
 		}
 	}
