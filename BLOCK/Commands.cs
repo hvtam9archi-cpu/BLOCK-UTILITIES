@@ -1,9 +1,11 @@
+using System;
 using AutoCADBlockTools.Services;
 using AutoCADBlockTools.UI;
 using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.EditorInput;
 using Autodesk.AutoCAD.Runtime;
 using Application = Autodesk.AutoCAD.ApplicationServices.Application;
+using AutoCADException = Autodesk.AutoCAD.Runtime.Exception;
 
 [assembly: CommandClass(typeof(AutoCADBlockTools.Commands))]
 
@@ -18,12 +20,10 @@ namespace AutoCADBlockTools
 		[CommandMethod("RSET", CommandFlags.Modal)]
 		public void RandomSettingsCommand()
 		{
-			Document doc = Application.DocumentManager.MdiActiveDocument;
-			Editor ed = doc.Editor;
-			var settings = BlockSettings.Instance;
-
-			try
+			ExecuteCommand("RSET", doc =>
 			{
+				Editor ed = doc.Editor;
+				var settings = BlockSettings.Instance;
 				var window = new RandomSettingsWindow(settings.MinScale, settings.MaxScale, settings.MinRotate, settings.MaxRotate);
 				if (Application.ShowModalWindow(window) == true)
 				{
@@ -37,35 +37,31 @@ namespace AutoCADBlockTools
 
 					ed.WriteMessage($"\nĐã cập nhật Global Settings: Scale [{settings.MinScale}-{settings.MaxScale}], Rotate [{settings.MinRotate}-{settings.MaxRotate}]");
 				}
-			}
-			catch (System.Exception ex)
-			{
-				ed.WriteMessage($"\nLỗi khi mở bảng cài đặt: {ex.Message}");
-			}
+			});
 		}
 
 		[CommandMethod("RSC", CommandFlags.UsePickSet | CommandFlags.Modal)]
 		public void RandomScale()
 		{
-			BlockLogic.ApplyRandomTransformation(true, false, "\nChọn các Block để Scale ngẫu nhiên");
+			ExecuteCommand("RSC", _ => BlockLogic.ApplyRandomTransformation(true, false, "\nChọn các Block để Scale ngẫu nhiên"));
 		}
 
 		[CommandMethod("RRT", CommandFlags.UsePickSet | CommandFlags.Modal)]
 		public void RandomRotate()
 		{
-			BlockLogic.ApplyRandomTransformation(false, true, "\nChọn các Block để Xoay ngẫu nhiên");
+			ExecuteCommand("RRT", _ => BlockLogic.ApplyRandomTransformation(false, true, "\nChọn các Block để Xoay ngẫu nhiên"));
 		}
 
 		[CommandMethod("RAL", CommandFlags.UsePickSet | CommandFlags.Modal)]
 		public void RandomAlign()
 		{
-			BlockLogic.ApplyRandomTransformation(true, true, "\nChọn các Block để Scale & Xoay ngẫu nhiên");
+			ExecuteCommand("RAL", _ => BlockLogic.ApplyRandomTransformation(true, true, "\nChọn các Block để Scale & Xoay ngẫu nhiên"));
 		}
 
 		[CommandMethod("RR", CommandFlags.UsePickSet | CommandFlags.Modal)]
 		public void ResetRotationAndScale()
 		{
-			BlockLogic.ResetRotationAndScale();
+			ExecuteCommand("RR", _ => BlockLogic.ResetRotationAndScale());
 		}
 
 		// ==========================================================================================
@@ -75,25 +71,25 @@ namespace AutoCADBlockTools
 		[CommandMethod("DELB", CommandFlags.UsePickSet | CommandFlags.Modal)]
 		public void DeleteBlocks()
 		{
-			BlockLogic.DeleteBlocks();
+			ExecuteCommand("DELB", _ => BlockLogic.DeleteBlocks());
 		}
 
 		[CommandMethod("DLB", CommandFlags.UsePickSet | CommandFlags.Modal)]
 		public void ChangeBlockToLayer0()
 		{
-			BlockLogic.ChangeBlockToLayer0();
+			ExecuteCommand("DLB", _ => BlockLogic.ChangeBlockToLayer0());
 		}
 
 		[CommandMethod("UDLB", CommandFlags.Modal)]
 		public void UndoDLB()
 		{
-			BlockLogic.UndoDLB();
+			ExecuteCommand("UDLB", _ => BlockLogic.UndoDLB());
 		}
 
 		[CommandMethod("MU", CommandFlags.UsePickSet | CommandFlags.Modal)]
 		public void MakeBlockUniqueGroup()
 		{
-			BlockLogic.MakeBlockUniqueGroup();
+			ExecuteCommand("MU", _ => BlockLogic.MakeBlockUniqueGroup());
 		}
 
 		// ==========================================================================================
@@ -103,25 +99,25 @@ namespace AutoCADBlockTools
 		[CommandMethod("CB", CommandFlags.UsePickSet | CommandFlags.Modal)]
 		public void CenterBlockBasePoint()
 		{
-			BlockLogic.MoveBlockBasePoint(true, true);
+			ExecuteCommand("CB", _ => BlockLogic.MoveBlockBasePoint(true, true));
 		}
 
 		[CommandMethod("CBP", CommandFlags.UsePickSet | CommandFlags.Modal)]
 		public void ChangeBasePointOnly()
 		{
-			BlockLogic.MoveBlockBasePoint(false, false);
+			ExecuteCommand("CBP", _ => BlockLogic.MoveBlockBasePoint(false, false));
 		}
 
 		[CommandMethod("CBPR", CommandFlags.UsePickSet | CommandFlags.Modal)]
 		public void ChangeBasePointRetainRef()
 		{
-			BlockLogic.MoveBlockBasePoint(false, true);
+			ExecuteCommand("CBPR", _ => BlockLogic.MoveBlockBasePoint(false, true));
 		}
 
 		[CommandMethod("AB", CommandFlags.UsePickSet | CommandFlags.Modal)]
 		public void AutoBlockCenter()
 		{
-			BlockLogic.AutoBlockCenter();
+			ExecuteCommand("AB", _ => BlockLogic.AutoBlockCenter());
 		}
 
 		// ==========================================================================================
@@ -131,7 +127,7 @@ namespace AutoCADBlockTools
 		[CommandMethod("JBP", CommandFlags.UsePickSet | CommandFlags.Modal)]
 		public void JustifyBasePointCmd()
 		{
-			BlockLogic.JustifyBasePointCmd();
+			ExecuteCommand("JBP", _ => BlockLogic.JustifyBasePointCmd());
 		}
 
 		// ==========================================================================================
@@ -141,7 +137,28 @@ namespace AutoCADBlockTools
 		[CommandMethod("RB", CommandFlags.Modal | CommandFlags.UsePickSet)]
 		public void RenameBlockCommand()
 		{
-			BlockLogic.RenameBlockCommand();
+			ExecuteCommand("RB", _ => BlockLogic.RenameBlockCommand());
+		}
+
+		private static void ExecuteCommand(string commandName, Action<Document> action)
+		{
+			Document document = Application.DocumentManager.MdiActiveDocument;
+			if (document == null) return;
+
+			string documentName = "<unknown>";
+			try
+			{
+				documentName = document.Name;
+				action(document);
+			}
+			catch (AutoCADException ex)
+			{
+				Logger.Error($"{commandName} failed in '{documentName}' ({ex.ErrorStatus})", ex);
+			}
+			catch (System.Exception ex)
+			{
+				Logger.Error($"{commandName} failed in '{documentName}'", ex);
+			}
 		}
 	}
 }

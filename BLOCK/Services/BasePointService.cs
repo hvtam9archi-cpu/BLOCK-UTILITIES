@@ -26,9 +26,13 @@ namespace AutoCADBlockTools.Services
 			var implied = ed.SelectImplied();
 			if (implied.Status == PromptStatus.OK && implied.Value.Count > 0)
 			{
-				targetId = implied.Value.GetObjectIds()[0];
-				wasPreSelected = true;
-				ed.SetImpliedSelection([]);
+				ObjectId[] blockIds = SelectionHelper.FilterBlockIdsNoTransaction(implied.Value.GetObjectIds());
+				if (blockIds != null)
+				{
+					targetId = blockIds[0];
+					wasPreSelected = true;
+					ed.SetImpliedSelection([]);
+				}
 			}
 
 			if (targetId == ObjectId.Null)
@@ -44,6 +48,26 @@ namespace AutoCADBlockTools.Services
 			bool changed = false;
 			try
 			{
+				Point3d pickedPointWcs = Point3d.Origin;
+				if (!autoCenter)
+				{
+					Point3d insertionPointWcs;
+					using (var readTr = db.TransactionManager.StartOpenCloseTransaction())
+					{
+						if (readTr.GetObject(targetId, OpenMode.ForRead) is not BlockReference selectedRef) return;
+						insertionPointWcs = selectedRef.Position;
+					}
+
+					var pointOptions = new PromptPointOptions("\nChọn điểm gốc mới: ")
+					{
+						UseBasePoint = true,
+						BasePoint = insertionPointWcs
+					};
+					var pointResult = ed.GetPoint(pointOptions);
+					if (pointResult.Status != PromptStatus.OK) return;
+					pickedPointWcs = pointResult.Value;
+				}
+
 				using (var docLock = doc.LockDocument())
 				using (var tr = db.TransactionManager.StartTransaction())
 				{
@@ -64,16 +88,7 @@ namespace AutoCADBlockTools.Services
 					}
 					else
 					{
-						var ppo = new PromptPointOptions("\nChọn điểm gốc mới: ")
-						{
-							UseBasePoint = true,
-							BasePoint = selectedRef.Position
-						};
-						var ppr = ed.GetPoint(ppo);
-						if (ppr.Status != PromptStatus.OK) return;
-
-						var matInv = selectedRef.BlockTransform.Inverse();
-						var pointInBlockSpace = ppr.Value.TransformBy(matInv);
+						var pointInBlockSpace = pickedPointWcs.TransformBy(selectedRef.BlockTransform.Inverse());
 						displacement = btr.Origin - pointInBlockSpace;
 					}
 

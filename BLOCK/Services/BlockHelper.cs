@@ -95,7 +95,10 @@ namespace AutoCADBlockTools.Services
 						}
 					}
 				}
-				catch { /* Entity không có Bounds — bỏ qua */ }
+				catch (Autodesk.AutoCAD.Runtime.Exception ex)
+				{
+					Logger.Warning($"GetBlockBoundingBox: bỏ qua {ent.GetType().Name} {id} trong '{btr.Name}' ({ex.ErrorStatus}).");
+				}
 			}
 			return totalExtents;
 		}

@@ -14,7 +14,7 @@ namespace AutoCADBlockTools.Services
 	{
 		// Undo Stack cho DLB — scoped theo database
 		private static readonly Stack<List<EntityBackupState>> _undoStack = new();
-		private static Database _databaseForUndo;
+		private static string _undoDatabaseFingerprint;
 
 		#region DELB - Delete Blocks
 
@@ -159,11 +159,7 @@ namespace AutoCADBlockTools.Services
 			var db = doc.Database;
 			var ed = doc.Editor;
 
-			if (_databaseForUndo != db)
-			{
-				_undoStack.Clear();
-				_databaseForUndo = db;
-			}
+			EnsureUndoScope(db);
 
 			var ss = SelectionHelper.GetSelection(ed, "\nChọn các Block cần đổi (Hỗ trợ cả Dynamic Block): ");
 			if (ss == null || ss.Count == 0) return;
@@ -173,22 +169,34 @@ namespace AutoCADBlockTools.Services
 			var currentBatchBackup = new List<EntityBackupState>();
 			var processedBtrs = new HashSet<ObjectId>();
 			var selectedBlockDefinitions = new HashSet<ObjectId>();
+			bool backupStored = false;
 
-			foreach (SelectedObject so in ss)
+			try
 			{
-				if (tr.GetObject(so.ObjectId, OpenMode.ForRead) is BlockReference br)
-					selectedBlockDefinitions.Add(BlockHelper.GetEffectiveDefinitionId(br));
-			}
+				foreach (SelectedObject so in ss)
+				{
+					if (tr.GetObject(so.ObjectId, OpenMode.ForRead) is BlockReference br)
+						selectedBlockDefinitions.Add(BlockHelper.GetEffectiveDefinitionId(br));
+				}
 
-			foreach (ObjectId btrId in selectedBlockDefinitions)
+				foreach (ObjectId btrId in selectedBlockDefinitions)
+				{
+					ProcessBlockDefinition(tr, btrId, processedBtrs, currentBatchBackup);
+				}
+
+				tr.Commit();
+				if (currentBatchBackup.Count > 0)
+				{
+					_undoStack.Push(currentBatchBackup);
+					backupStored = true;
+				}
+				db.TransactionManager.QueueForGraphicsFlush();
+				Logger.Info($"Đã cập nhật Layer 0 cho {processedBtrs.Count} loại Block.");
+			}
+			finally
 			{
-				ProcessBlockDefinition(tr, btrId, processedBtrs, currentBatchBackup);
+				if (!backupStored) DisposeBackupBatch(currentBatchBackup);
 			}
-
-			tr.Commit();
-			if (currentBatchBackup.Count > 0) _undoStack.Push(currentBatchBackup);
-			db.TransactionManager.QueueForGraphicsFlush();
-			Logger.Info($"Đã cập nhật Layer 0 cho {processedBtrs.Count} loại Block.");
 		}
 
 		private static void ProcessBlockDefinition(Transaction tr, ObjectId btrId,
@@ -215,7 +223,10 @@ namespace AutoCADBlockTools.Services
 						});
 						ent.UpgradeOpen();
 						ent.Layer = "0";
-						ent.Color = Color.FromColorIndex(ColorMethod.ByLayer, 256);
+						using (Color byLayerColor = Color.FromColorIndex(ColorMethod.ByLayer, 256))
+						{
+							ent.Color = byLayerColor;
+						}
 					}
 				}
 			}
@@ -226,11 +237,7 @@ namespace AutoCADBlockTools.Services
 			var doc = Application.DocumentManager.MdiActiveDocument;
 			var db = doc.Database;
 
-			if (_databaseForUndo != db)
-			{
-				_undoStack.Clear();
-				_databaseForUndo = db;
-			}
+			EnsureUndoScope(db);
 
 			if (_undoStack.Count == 0)
 			{
@@ -246,23 +253,17 @@ namespace AutoCADBlockTools.Services
 			{
 				if (state.EntityId.IsValid && !state.EntityId.IsErased)
 				{
-					try
+					if (tr.GetObject(state.EntityId, OpenMode.ForWrite) is Entity ent)
 					{
-						if (tr.GetObject(state.EntityId, OpenMode.ForWrite) is Entity ent)
-						{
-							ent.Layer = state.OldLayer;
-							ent.Color = state.OldColor;
-							count++;
-						}
-					}
-					catch (Exception ex)
-					{
-						Logger.Warning($"UndoDLB: {ex.Message}");
+						ent.Layer = state.OldLayer;
+						ent.Color = state.OldColor;
+						count++;
 					}
 				}
 			}
 			tr.Commit();
 			_undoStack.Pop();
+			DisposeBackupBatch(lastBatch);
 			db.TransactionManager.QueueForGraphicsFlush();
 			Logger.Info($"Đã hoàn tác (UDLB) cho {count} đối tượng.");
 		}
@@ -327,5 +328,35 @@ namespace AutoCADBlockTools.Services
 		}
 
 		#endregion
+
+		internal static void ClearUndoState(Database database = null)
+		{
+			if (database != null &&
+				!string.Equals(_undoDatabaseFingerprint, database.FingerprintGuid, StringComparison.OrdinalIgnoreCase)) return;
+
+			ClearUndoStack();
+			_undoDatabaseFingerprint = null;
+		}
+
+		private static void EnsureUndoScope(Database database)
+		{
+			string fingerprint = database.FingerprintGuid;
+			if (string.Equals(_undoDatabaseFingerprint, fingerprint, StringComparison.OrdinalIgnoreCase)) return;
+
+			ClearUndoStack();
+			_undoDatabaseFingerprint = fingerprint;
+		}
+
+		private static void ClearUndoStack()
+		{
+			while (_undoStack.Count > 0)
+				DisposeBackupBatch(_undoStack.Pop());
+		}
+
+		private static void DisposeBackupBatch(IEnumerable<EntityBackupState> backupBatch)
+		{
+			foreach (EntityBackupState state in backupBatch)
+				state.Dispose();
+		}
 	}
 }
